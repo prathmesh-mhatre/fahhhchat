@@ -1,0 +1,21 @@
+{
+  "name": "@fahhhchat/ui",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "echo \"No ui lint yet\"",
+    "test": "echo \"No ui tests yet\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.4",
+    "typescript": "^5.8.3"
+  }
+}

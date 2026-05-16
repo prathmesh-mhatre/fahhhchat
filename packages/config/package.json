@@ -1,0 +1,17 @@
+{
+  "name": "@fahhhchat/config",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "echo \"No config lint yet\"",
+    "test": "echo \"No config tests yet\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "fahhhchat",
+  "private": true,
+  "packageManager": "pnpm@10.11.0",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "test": "turbo test",
+    "typecheck": "turbo typecheck",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.19",
+    "prettier": "^3.5.3",
+    "turbo": "^2.5.3",
+    "typescript": "^5.8.3"
+  }
+}

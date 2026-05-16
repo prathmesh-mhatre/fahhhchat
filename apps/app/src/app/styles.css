@@ -1,0 +1,104 @@
+:root {
+  color-scheme: dark;
+  background: #090b10;
+  color: #f6f7fb;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.chat-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background:
+    linear-gradient(145deg, rgba(66, 153, 225, 0.14), transparent 40%),
+    linear-gradient(320deg, rgba(125, 215, 185, 0.16), transparent 44%),
+    #090b10;
+}
+
+.chat-panel {
+  width: min(460px, 100%);
+  min-height: min(760px, calc(100vh - 40px));
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(16, 20, 29, 0.94);
+  overflow: hidden;
+}
+
+.topbar,
+.composer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  color: #c9ceda;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.presence-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #7dd7b9;
+}
+
+.entry {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 28px;
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  color: #7dd7b9;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  font-size: 2.6rem;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+p {
+  color: #b6bfce;
+  line-height: 1.6;
+}
+
+.actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.composer {
+  justify-content: space-between;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 0;
+}
+
+.composer button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 16px;
+  color: #07110f;
+  background: #7dd7b9;
+  font-weight: 700;
+}

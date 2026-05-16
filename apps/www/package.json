@@ -1,0 +1,22 @@
+{
+  "name": "@fahhhchat/www",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "lint": "next lint",
+    "test": "echo \"No www tests yet\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fahhhchat/ui": "workspace:*",
+    "next": "^15.3.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.4",
+    "@types/react-dom": "^19.1.5",
+    "typescript": "^5.8.3"
+  }
+}
