@@ -1,11 +1,11 @@
-import { ButtonLink } from "@fahhhchat/ui";
+import { ButtonLink, Eyebrow } from "@fahhhchat/ui";
 
 export default function HomePage() {
   return (
     <main className="home">
       <section className="hero" aria-labelledby="hero-title">
         <div className="hero__content">
-          <p className="eyebrow">Anonymous realtime chat</p>
+          <Eyebrow className="eyebrow">Anonymous realtime chat</Eyebrow>
           <h1 id="hero-title">Fahhhchat</h1>
           <p className="lede">
             Meet a stranger instantly, keep your real identity private, and move on with a
