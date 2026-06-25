@@ -59,11 +59,24 @@ describe("Session gate (e2e)", () => {
     expect(res.body).toMatchObject({ accepted: true, legalVersion: productConfig.legalVersion });
   });
 
-  it("guards queue eligibility until the gate is accepted", async () => {
+  it("guards queue eligibility until both legal and safety gates are accepted", async () => {
+    // No session at all -> 401 from the legal guard.
     await request(app.getHttpServer()).get("/session/queue-eligibility").expect(401);
 
     const accepted = await acceptCookie().expect(200);
     const cookie = accepted.headers["set-cookie"];
+
+    // Legal accepted but safety guidelines not yet -> 403 from the safety guard.
+    await request(app.getHttpServer())
+      .get("/session/queue-eligibility")
+      .set("Cookie", cookie)
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .post("/session/safety/accept")
+      .set("Cookie", cookie)
+      .send({ safetyVersion: productConfig.safetyGuidelinesVersion })
+      .expect(200);
 
     const res = await request(app.getHttpServer())
       .get("/session/queue-eligibility")

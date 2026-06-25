@@ -38,7 +38,13 @@ describe("GuestSessionService", () => {
     expect(summary).toEqual({
       accepted: true,
       legalVersion: productConfig.legalVersion,
-      acceptedAt: expect.any(String)
+      acceptedAt: expect.any(String),
+      safety: {
+        required: true,
+        currentVersion: productConfig.safetyGuidelinesVersion,
+        acceptedVersion: null,
+        reason: "first_time"
+      }
     });
 
     const resolved = await service.getSession(token);
@@ -64,5 +70,64 @@ describe("GuestSessionService", () => {
     });
 
     expect(await service.getSession(token)).toBeNull();
+  });
+
+  describe("safety guidelines gate", () => {
+    async function newSession() {
+      const { token } = await service.accept({
+        ageConfirmed: true,
+        legalVersion: productConfig.legalVersion
+      });
+      return token;
+    }
+
+    it("requires acceptance on first visit, then clears it", async () => {
+      const token = await newSession();
+
+      const before = await service.getSafetyStatus(token);
+      expect(before).toMatchObject({ required: true, reason: "first_time", acceptedVersion: null });
+
+      const summary = await service.acceptSafety(token, productConfig.safetyGuidelinesVersion);
+      expect(summary.safety).toMatchObject({ required: false, reason: null });
+      expect(await service.getSafetyStatus(token)).toMatchObject({ required: false, reason: null });
+    });
+
+    it("re-prompts when the accepted version no longer matches the current one (story 10)", async () => {
+      const token = await newSession();
+      const sessionId = service.verify(token)!;
+
+      // Simulate a previously-accepted, now-outdated guidelines version persisted
+      // on the record, mirroring what a version bump in config produces.
+      const record = (await store.get(sessionId))!;
+      record.safetyGuidelinesVersion = "2000-ancient";
+      record.safetyGuidelinesAcceptedAt = new Date().toISOString();
+      await store.save(record);
+
+      expect(await service.getSafetyStatus(token)).toEqual({
+        required: true,
+        currentVersion: productConfig.safetyGuidelinesVersion,
+        acceptedVersion: "2000-ancient",
+        reason: "version_changed"
+      });
+    });
+
+    it("re-prompts after an enforcement flag, then clears on re-acceptance (story 11)", async () => {
+      const token = await newSession();
+      await service.acceptSafety(token, productConfig.safetyGuidelinesVersion);
+
+      await service.flagSafetyReprompt(token);
+      expect(await service.getSafetyStatus(token)).toMatchObject({
+        required: true,
+        reason: "enforcement"
+      });
+
+      await service.acceptSafety(token, productConfig.safetyGuidelinesVersion);
+      expect(await service.getSafetyStatus(token)).toMatchObject({ required: false, reason: null });
+    });
+
+    it("rejects acceptance of a stale guidelines version", async () => {
+      const token = await newSession();
+      await expect(service.acceptSafety(token, "1999-old")).rejects.toBeInstanceOf(BadRequestException);
+    });
   });
 });

@@ -3,12 +3,33 @@ export interface GuestSessionRecord {
   legalVersion: string;
   ageConfirmed: boolean;
   acceptedAt: string;
+  /** Safety guidelines version the user last accepted, or undefined if never. */
+  safetyGuidelinesVersion?: string;
+  safetyGuidelinesAcceptedAt?: string;
+  /**
+   * Set after an enforcement event (warning/ban) so the guidelines are shown
+   * again on the user's next visit even if the version has not changed. Cleared
+   * when the user re-accepts. The moderation slice (#32) flips this flag.
+   */
+  safetyRepromptRequired?: boolean;
+}
+
+/** Why the safety guidelines gate is being shown, or null when not required. */
+export type SafetyGuidelinesReason = "first_time" | "version_changed" | "enforcement";
+
+export interface SafetyGuidelinesStatus {
+  /** True when the user must (re-)accept the guidelines before chatting. */
+  required: boolean;
+  currentVersion: string;
+  acceptedVersion: string | null;
+  reason: SafetyGuidelinesReason | null;
 }
 
 export interface GuestSessionSummary {
   accepted: true;
   legalVersion: string;
   acceptedAt: string;
+  safety: SafetyGuidelinesStatus;
 }
 
 /**

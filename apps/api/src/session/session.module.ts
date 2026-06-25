@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { GuestSessionService } from "./guest-session.service";
 import { GuestGuard } from "./guest.guard";
+import { SafetyGuidelinesGuard } from "./safety-guidelines.guard";
 import { InMemorySessionStore } from "./in-memory-session.store";
 import { SessionController } from "./session.controller";
 import { SESSION_STORE, SessionStore } from "./session.types";
@@ -26,6 +27,7 @@ function createSessionStore(): SessionStore {
   providers: [
     GuestSessionService,
     GuestGuard,
+    SafetyGuidelinesGuard,
     {
       provide: SESSION_STORE,
       useFactory: createSessionStore

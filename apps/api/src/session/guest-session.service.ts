@@ -1,8 +1,13 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import { BadRequestException, Inject, Injectable } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable, UnauthorizedException } from "@nestjs/common";
 import { productConfig } from "@fahhhchat/config";
 import { SESSION_STORE } from "./session.types";
-import type { GuestSessionRecord, GuestSessionSummary, SessionStore } from "./session.types";
+import type {
+  GuestSessionRecord,
+  GuestSessionSummary,
+  SafetyGuidelinesStatus,
+  SessionStore
+} from "./session.types";
 
 export interface AcceptLegalInput {
   ageConfirmed: unknown;
@@ -57,22 +62,88 @@ export class GuestSessionService {
 
   /** Resolve the accepted session for a cookie value, or null if missing/invalid. */
   async getSession(token: string | undefined): Promise<GuestSessionSummary | null> {
+    const record = await this.resolveRecord(token);
+    return record ? this.toSummary(record) : null;
+  }
+
+  /**
+   * Records acceptance of the current safety guidelines for an existing session.
+   * Clears any enforcement-driven re-prompt flag. Re-prompting on a changed
+   * version or after enforcement is handled by {@link safetyStatus}.
+   */
+  async acceptSafety(token: string | undefined, safetyVersion: unknown): Promise<GuestSessionSummary> {
+    const record = await this.resolveRecord(token);
+    if (!record) {
+      throw new UnauthorizedException("Confirm your age and accept the terms before continuing.");
+    }
+    if (safetyVersion !== productConfig.safetyGuidelinesVersion) {
+      throw new BadRequestException("The safety guidelines have changed. Please review and accept again.");
+    }
+
+    record.safetyGuidelinesVersion = productConfig.safetyGuidelinesVersion;
+    record.safetyGuidelinesAcceptedAt = new Date().toISOString();
+    record.safetyRepromptRequired = false;
+    await this.store.save(record);
+
+    return this.toSummary(record);
+  }
+
+  /**
+   * Flags a session so the safety guidelines are shown again on the next visit,
+   * regardless of version. Called after enforcement events (story 11). Exposed as
+   * the hook the moderation slice (#32) will reuse.
+   */
+  async flagSafetyReprompt(token: string | undefined): Promise<GuestSessionSummary> {
+    const record = await this.resolveRecord(token);
+    if (!record) {
+      throw new UnauthorizedException("Confirm your age and accept the terms before continuing.");
+    }
+    record.safetyRepromptRequired = true;
+    await this.store.save(record);
+    return this.toSummary(record);
+  }
+
+  /** Safety gate status for a cookie value, or null if there is no valid session. */
+  async getSafetyStatus(token: string | undefined): Promise<SafetyGuidelinesStatus | null> {
+    const record = await this.resolveRecord(token);
+    return record ? this.safetyStatus(record) : null;
+  }
+
+  private async resolveRecord(token: string | undefined): Promise<GuestSessionRecord | null> {
     const sessionId = this.verify(token);
     if (!sessionId) {
       return null;
     }
-    const record = await this.store.get(sessionId);
-    if (!record) {
-      return null;
+    return this.store.get(sessionId);
+  }
+
+  private safetyStatus(record: GuestSessionRecord): SafetyGuidelinesStatus {
+    const currentVersion = productConfig.safetyGuidelinesVersion;
+    const acceptedVersion = record.safetyGuidelinesVersion ?? null;
+
+    let reason: SafetyGuidelinesStatus["reason"] = null;
+    if (record.safetyRepromptRequired) {
+      reason = "enforcement";
+    } else if (acceptedVersion === null) {
+      reason = "first_time";
+    } else if (acceptedVersion !== currentVersion) {
+      reason = "version_changed";
     }
-    return this.toSummary(record);
+
+    return {
+      required: reason !== null,
+      currentVersion,
+      acceptedVersion,
+      reason
+    };
   }
 
   private toSummary(record: GuestSessionRecord): GuestSessionSummary {
     return {
       accepted: true,
       legalVersion: record.legalVersion,
-      acceptedAt: record.acceptedAt
+      acceptedAt: record.acceptedAt,
+      safety: this.safetyStatus(record)
     };
   }
 
