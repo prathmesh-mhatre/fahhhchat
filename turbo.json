@@ -1,5 +1,15 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalEnv": ["NODE_ENV", "NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_WWW_URL", "NEXT_PUBLIC_API_URL"],
+  "globalPassThroughEnv": [
+    "AUTH_SECRET",
+    "REDIS_URL",
+    "DATABASE_URL",
+    "PORT",
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "ADMIN_EMAIL_ALLOWLIST"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
