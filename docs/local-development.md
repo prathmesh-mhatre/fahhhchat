@@ -12,11 +12,34 @@
 pnpm install
 ```
 
+## Environment
+
+Copy the example file and adjust as needed:
+
+```bash
+cp .env.example .env
+```
+
+The API reads `process.env` directly (no dotenv loading yet), so `AUTH_SECRET`
+must be present in the shell that runs it — it signs guest session cookies and
+the service refuses to start without it. Export it (or your process manager's
+env) before `pnpm dev`:
+
+```bash
+AUTH_SECRET=dev-secret pnpm dev
+```
+
+Leave `REDIS_URL` unset for local dev to use the in-memory guest session store;
+set it to run against Redis.
+
 ## Run
 
 ```bash
 pnpm dev
 ```
+
+The API runs via `ts-node-dev` so it can execute the workspace TypeScript
+packages directly; the Next apps use their own dev servers.
 
 Default ports:
 
