@@ -13,11 +13,16 @@ import type { Request, Response } from "express";
 import { GuestSessionService } from "./guest-session.service";
 import { GuestGuard } from "./guest.guard";
 import type { RequestWithGuestSession } from "./guest.guard";
+import { SafetyGuidelinesGuard } from "./safety-guidelines.guard";
 import { GUEST_COOKIE_NAME, GUEST_SESSION_TTL_SECONDS } from "./session.types";
 
 interface AcceptLegalBody {
   ageConfirmed?: unknown;
   legalVersion?: unknown;
+}
+
+interface AcceptSafetyBody {
+  safetyVersion?: unknown;
 }
 
 @Controller("session")
@@ -59,11 +64,37 @@ export class SessionController {
   }
 
   /**
+   * Records acceptance of the current safety guidelines for an existing session
+   * (story 9). Requires the legal gate to have been passed first.
+   */
+  @Post("safety/accept")
+  @HttpCode(200)
+  @UseGuards(GuestGuard)
+  async acceptSafety(@Body() body: AcceptSafetyBody, @Req() req: Request) {
+    const token = req.cookies?.[GUEST_COOKIE_NAME];
+    return this.guestSessions.acceptSafety(token, body?.safetyVersion);
+  }
+
+  /**
+   * Flags the session to re-show the safety guidelines on the next visit, as
+   * happens after an enforcement event (story 11). This is the hook the
+   * moderation slice (#32) will call internally when it issues warnings/bans.
+   */
+  @Post("safety/reprompt")
+  @HttpCode(200)
+  @UseGuards(GuestGuard)
+  async repromptSafety(@Req() req: Request) {
+    const token = req.cookies?.[GUEST_COOKIE_NAME];
+    return this.guestSessions.flagSafetyReprompt(token);
+  }
+
+  /**
    * Placeholder protected route proving the gate is enforced server-side. The
-   * matchmaking slice replaces this with real queue entry behind the same guard.
+   * matchmaking slice replaces this with real queue entry behind the same guards.
+   * Requires both the legal gate and the current safety guidelines.
    */
   @Get("queue-eligibility")
-  @UseGuards(GuestGuard)
+  @UseGuards(GuestGuard, SafetyGuidelinesGuard)
   queueEligibility(@Req() req: RequestWithGuestSession) {
     return { eligible: true, legalVersion: req.guestSession?.legalVersion };
   }
