@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { SiteShell } from "@fahhhchat/ui";
 import { ConsentBanner } from "../components/ConsentBanner";
+import { Providers } from "../components/Providers";
 import "./styles.css";
 
 export const metadata: Metadata = {
@@ -16,8 +17,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <SiteShell>{children}</SiteShell>
-        <ConsentBanner />
+        <Providers>
+          <SiteShell>{children}</SiteShell>
+          <ConsentBanner />
+        </Providers>
       </body>
     </html>
   );

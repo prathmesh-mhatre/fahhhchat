@@ -1,0 +1,74 @@
+import cookieParser from "cookie-parser";
+import { INestApplication } from "@nestjs/common";
+import { Test } from "@nestjs/testing";
+import request from "supertest";
+import { productConfig } from "@fahhhchat/config";
+import { AuthModule } from "../src/auth/auth.module";
+import { encodeMockGoogleToken } from "../src/auth/google-token-verifier";
+
+describe("Auth (e2e)", () => {
+  let app: INestApplication;
+
+  beforeAll(async () => {
+    process.env.AUTH_SECRET = "test-secret";
+    process.env.AUTH_DEV_MODE = "true";
+    delete process.env.GOOGLE_CLIENT_ID;
+
+    const moduleRef = await Test.createTestingModule({ imports: [AuthModule] }).compile();
+    app = moduleRef.createNestApplication();
+    app.use(cookieParser());
+    await app.init();
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  const idToken = encodeMockGoogleToken({ sub: "google-e2e", email: "e2e@example.com" });
+
+  function login() {
+    return request(app.getHttpServer()).post("/auth/google").send({ idToken });
+  }
+
+  it("rejects login with an invalid Google token", async () => {
+    await request(app.getHttpServer()).post("/auth/google").send({ idToken: "bogus" }).expect(401);
+  });
+
+  it("logs in, sets an http-only user cookie, and hides Google identity", async () => {
+    const res = await login().expect(200);
+
+    expect(res.body).toMatchObject({ loggedIn: true, userId: expect.any(String) });
+    expect(JSON.stringify(res.body)).not.toContain("e2e@example.com");
+
+    const setCookie = res.headers["set-cookie"][0];
+    expect(setCookie).toContain("fc_user=");
+    expect(setCookie.toLowerCase()).toContain("httponly");
+  });
+
+  it("returns 401 from /auth/me without a session", async () => {
+    await request(app.getHttpServer()).get("/auth/me").expect(401);
+  });
+
+  it("persists legal acceptance to the account across requests", async () => {
+    const cookie = (await login().expect(200)).headers["set-cookie"];
+
+    const me = await request(app.getHttpServer()).get("/auth/me").set("Cookie", cookie).expect(200);
+    expect(me.body.legal.required).toBe(true);
+
+    await request(app.getHttpServer())
+      .post("/auth/legal/accept")
+      .set("Cookie", cookie)
+      .send({ ageConfirmed: true, legalVersion: productConfig.legalVersion })
+      .expect(200);
+
+    const after = await request(app.getHttpServer()).get("/auth/me").set("Cookie", cookie).expect(200);
+    expect(after.body.legal.required).toBe(false);
+  });
+
+  it("rejects legal acceptance without a session (guard enforced)", async () => {
+    await request(app.getHttpServer())
+      .post("/auth/legal/accept")
+      .send({ ageConfirmed: true, legalVersion: productConfig.legalVersion })
+      .expect(401);
+  });
+});
