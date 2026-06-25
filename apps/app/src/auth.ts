@@ -65,8 +65,12 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       return token;
     },
     async session({ session, token }) {
-      // Expose the id token to the client so it can establish the backend session.
-      // Google email/profile are deliberately not forwarded to matched strangers.
+      // The client only needs the id token to establish the backend session.
+      // Strip the Google profile (name/email/image) so the app never holds
+      // Google identity client-side — internal identity comes from the backend.
+      if (session.user) {
+        session.user = {} as typeof session.user;
+      }
       (session as { idToken?: unknown }).idToken = token.idToken;
       return session;
     }
