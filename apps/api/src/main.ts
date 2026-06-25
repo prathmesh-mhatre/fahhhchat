@@ -1,8 +1,10 @@
+import cookieParser from "cookie-parser";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./modules/app.module";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.use(cookieParser());
   app.enableCors({
     origin: [
       process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3001",
