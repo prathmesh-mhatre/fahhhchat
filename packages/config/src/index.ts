@@ -12,6 +12,18 @@ export const productConfig = {
   nextConfirmSeconds: 3
 } as const;
 
+/**
+ * Dev-only contract for simulating a Google login without real OAuth
+ * credentials. The web app encodes a chosen identity into a `mock.` token and
+ * the API's dev verifier decodes it (only when `AUTH_DEV_MODE=true`). Keeping the
+ * format here ensures both sides stay in agreement. Never accepted in production.
+ */
+export const MOCK_GOOGLE_TOKEN_PREFIX = "mock.";
+
+export function encodeMockGoogleToken(identity: { sub: string; email: string }): string {
+  return MOCK_GOOGLE_TOKEN_PREFIX + Buffer.from(JSON.stringify(identity)).toString("base64url");
+}
+
 export const featureFlagKeys = [
   "camera_media",
   "gender_filters",

@@ -32,6 +32,17 @@ AUTH_SECRET=dev-secret pnpm dev
 Leave `REDIS_URL` unset for local dev to use the in-memory guest session store;
 set it to run against Redis.
 
+### Google login (dev mode)
+
+Google login uses Auth.js/NextAuth in the chat app, and the API exchanges the
+verified Google ID token for a pseudonymous internal user. Real OAuth needs
+`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`. To demo the flow locally without
+credentials, set `AUTH_DEV_MODE=true` (API) and `NEXT_PUBLIC_AUTH_DEV_MODE=true`
+(app): the login page shows a "test account" button and the API accepts a
+clearly-marked mock token. Logged-in users get a durable internal id and
+persisted legal/safety acceptance; Google identity is never exposed to the
+browser or matched strangers. Do not enable dev mode in production.
+
 ## Run
 
 ```bash
