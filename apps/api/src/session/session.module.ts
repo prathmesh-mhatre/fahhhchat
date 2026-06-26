@@ -32,6 +32,7 @@ function createSessionStore(): SessionStore {
       provide: SESSION_STORE,
       useFactory: createSessionStore
     }
-  ]
+  ],
+  exports: [GuestSessionService]
 })
 export class SessionModule {}
