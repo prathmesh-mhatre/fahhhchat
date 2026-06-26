@@ -1,7 +1,8 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { BadRequestException, ConflictException, Inject, Injectable, UnauthorizedException } from "@nestjs/common";
-import { productConfig } from "@fahhhchat/config";
+import { productConfig, resolveAvatarSelection } from "@fahhhchat/config";
 import { generateDisplayIdentity } from "../identity/display-identity";
+import { avatarChangeStatus } from "../identity/avatar-change";
 import { displayNameChangeStatus } from "../identity/display-name-change";
 import { moderateDisplayName } from "../identity/username-moderation";
 import type { SafetyGuidelinesStatus } from "../session/session.types";
@@ -140,6 +141,34 @@ export class AuthService {
     return this.toSummary(record);
   }
 
+  /**
+   * Changes the account's avatar to another entry from the safe built-in set
+   * (story 19). Enforces the once-per-day cooldown and validates the selection
+   * against the allow-list — no uploads (story 20). The cooldown timestamp
+   * persists on the account, so it survives logout/login (story 21).
+   */
+  async changeAvatar(
+    token: string | undefined,
+    rawAvatarId: unknown,
+    rawBackgroundColor: unknown
+  ): Promise<UserSummary> {
+    const record = await this.requireRecord(token);
+
+    if (!avatarChangeStatus(record.avatarUpdatedAt).allowed) {
+      throw new ConflictException("You can only change your avatar once a day. Try again later.");
+    }
+
+    const avatar = resolveAvatarSelection(rawAvatarId, rawBackgroundColor);
+    if (!avatar) {
+      throw new BadRequestException("Choose an avatar from the built-in set.");
+    }
+
+    record.identity = { ...(record.identity ?? generateDisplayIdentity()), avatar };
+    record.avatarUpdatedAt = new Date().toISOString();
+    await this.store.save(record);
+    return this.toSummary(record);
+  }
+
   /** Flag the account to re-show safety guidelines next visit (enforcement hook). */
   async flagSafetyReprompt(token: string | undefined): Promise<UserSummary> {
     const record = await this.requireRecord(token);
@@ -197,6 +226,7 @@ export class AuthService {
       // any record constructed outside that path.
       identity: record.identity ?? generateDisplayIdentity(),
       displayNameChange: displayNameChangeStatus(record.displayNameUpdatedAt),
+      avatarChange: avatarChangeStatus(record.avatarUpdatedAt),
       legal: this.legalStatus(record),
       safety: this.safetyStatus(record)
     };

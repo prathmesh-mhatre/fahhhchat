@@ -29,6 +29,11 @@ interface ChangeDisplayNameBody {
   displayName?: unknown;
 }
 
+interface ChangeAvatarBody {
+  avatarId?: unknown;
+  backgroundColor?: unknown;
+}
+
 @Controller("session")
 export class SessionController {
   constructor(private readonly guestSessions: GuestSessionService) {}
@@ -89,6 +94,18 @@ export class SessionController {
   async changeDisplayName(@Body() body: ChangeDisplayNameBody, @Req() req: Request) {
     const token = req.cookies?.[GUEST_COOKIE_NAME];
     return this.guestSessions.changeDisplayName(token, body?.displayName);
+  }
+
+  /**
+   * Changes the guest session's avatar to another entry from the safe built-in
+   * set, once per day (stories 19-21). Requires an accepted legal gate.
+   */
+  @Post("avatar")
+  @HttpCode(200)
+  @UseGuards(GuestGuard)
+  async changeAvatar(@Body() body: ChangeAvatarBody, @Req() req: Request) {
+    const token = req.cookies?.[GUEST_COOKIE_NAME];
+    return this.guestSessions.changeAvatar(token, body?.avatarId, body?.backgroundColor);
   }
 
   /**

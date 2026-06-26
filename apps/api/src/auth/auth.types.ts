@@ -31,6 +31,12 @@ export interface UserRecord {
    * and persists with the account across sessions.
    */
   displayNameUpdatedAt?: string;
+  /**
+   * When the account last *changed* its avatar (story 19). Undefined while the
+   * avatar is still the generated default. Drives the once-per-day avatar
+   * cooldown and persists with the account, independent of the name cooldown.
+   */
+  avatarUpdatedAt?: string;
   /** Persisted legal/age acceptance for the account (story 22). */
   legalVersion?: string;
   ageConfirmed?: boolean;
@@ -42,7 +48,7 @@ export interface UserRecord {
   safetyRepromptRequired?: boolean;
 }
 
-import type { DisplayIdentity, DisplayNameChangeStatus } from "@fahhhchat/config";
+import type { AvatarChangeStatus, DisplayIdentity, DisplayNameChangeStatus } from "@fahhhchat/config";
 import type { SafetyGuidelinesStatus } from "../session/session.types";
 
 /** Whether the logged-in user still owes legal/age acceptance. */
@@ -64,6 +70,8 @@ export interface UserSummary {
   identity: DisplayIdentity;
   /** Whether the once-per-day display-name change is available (story 16). */
   displayNameChange: DisplayNameChangeStatus;
+  /** Whether the once-per-day avatar change is available (story 19). */
+  avatarChange: AvatarChangeStatus;
   legal: LegalAcceptanceStatus;
   safety: SafetyGuidelinesStatus;
 }

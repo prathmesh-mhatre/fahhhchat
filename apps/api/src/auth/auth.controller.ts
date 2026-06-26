@@ -31,6 +31,11 @@ interface ChangeDisplayNameBody {
   displayName?: unknown;
 }
 
+interface ChangeAvatarBody {
+  avatarId?: unknown;
+  backgroundColor?: unknown;
+}
+
 @Controller("auth")
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
@@ -87,6 +92,18 @@ export class AuthController {
   async changeDisplayName(@Body() body: ChangeDisplayNameBody, @Req() req: Request) {
     const token = req.cookies?.[USER_COOKIE_NAME];
     return this.auth.changeDisplayName(token, body?.displayName);
+  }
+
+  /**
+   * Changes the account's avatar to another entry from the safe built-in set,
+   * once per day (stories 19-21). The cooldown persists with the account.
+   */
+  @Post("avatar")
+  @HttpCode(200)
+  @UseGuards(AuthGuard)
+  async changeAvatar(@Body() body: ChangeAvatarBody, @Req() req: Request) {
+    const token = req.cookies?.[USER_COOKIE_NAME];
+    return this.auth.changeAvatar(token, body?.avatarId, body?.backgroundColor);
   }
 
   /** Clears the app session cookie (logout). */

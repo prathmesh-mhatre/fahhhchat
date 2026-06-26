@@ -85,6 +85,42 @@ describe("Session gate (e2e)", () => {
       .expect(409);
   });
 
+  it("changes the avatar from the built-in set once, then enforces the cooldown (stories 19-21)", async () => {
+    const accepted = await acceptCookie().expect(200);
+    const cookie = accepted.headers["set-cookie"];
+
+    const changed = await request(app.getHttpServer())
+      .post("/session/avatar")
+      .set("Cookie", cookie)
+      .send({ avatarId: "fox", backgroundColor: "#EC4899" })
+      .expect(200);
+    expect(changed.body.identity.avatar).toEqual({ avatarId: "fox", backgroundColor: "#EC4899" });
+    expect(changed.body.avatarChange.allowed).toBe(false);
+
+    // A second change within the day is blocked by the cooldown (409).
+    await request(app.getHttpServer())
+      .post("/session/avatar")
+      .set("Cookie", cookie)
+      .send({ avatarId: "owl", backgroundColor: "#10B981" })
+      .expect(409);
+  });
+
+  it("rejects an avatar outside the built-in set (400) and requires a session (401)", async () => {
+    const accepted = await acceptCookie().expect(200);
+    const cookie = accepted.headers["set-cookie"];
+
+    await request(app.getHttpServer())
+      .post("/session/avatar")
+      .set("Cookie", cookie)
+      .send({ avatarId: "dragon", backgroundColor: "#EC4899" })
+      .expect(400);
+
+    await request(app.getHttpServer())
+      .post("/session/avatar")
+      .send({ avatarId: "fox", backgroundColor: "#EC4899" })
+      .expect(401);
+  });
+
   it("rejects an unsafe display name (400) and requires a session (401)", async () => {
     const accepted = await acceptCookie().expect(200);
     const cookie = accepted.headers["set-cookie"];

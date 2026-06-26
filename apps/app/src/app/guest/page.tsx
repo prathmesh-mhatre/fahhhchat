@@ -6,12 +6,14 @@ import { productConfig } from "@fahhhchat/config";
 import {
   acceptGuestLegal,
   acceptGuestSafety,
+  changeGuestAvatar,
   changeGuestDisplayName,
   fetchGuestSession,
   type GuestAcceptance,
   type SafetyGuidelinesReason
 } from "../../lib/session-api";
 import { DisplayNameEditor } from "../../components/DisplayNameEditor";
+import { AvatarEditor } from "../../components/AvatarEditor";
 
 const WWW_URL = process.env.NEXT_PUBLIC_WWW_URL ?? "http://localhost:3000";
 
@@ -239,6 +241,13 @@ export default function GuestEntryPage() {
                 change={session.displayNameChange}
                 onSave={async (displayName) => {
                   setSession(await changeGuestDisplayName(displayName));
+                }}
+              />
+              <AvatarEditor
+                identity={session.identity}
+                change={session.avatarChange}
+                onSave={async (avatarId, backgroundColor) => {
+                  setSession(await changeGuestAvatar(avatarId, backgroundColor));
                 }}
               />
               <p>

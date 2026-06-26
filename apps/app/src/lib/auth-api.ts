@@ -1,4 +1,4 @@
-import type { DisplayIdentity, DisplayNameChangeStatus } from "@fahhhchat/config";
+import type { AvatarChangeStatus, DisplayIdentity, DisplayNameChangeStatus } from "@fahhhchat/config";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -23,6 +23,8 @@ export interface AppUser {
   identity: DisplayIdentity;
   /** Whether the once-per-day display-name change is currently available. */
   displayNameChange: DisplayNameChangeStatus;
+  /** Whether the once-per-day avatar change is currently available. */
+  avatarChange: AvatarChangeStatus;
   legal: LegalAcceptanceStatus;
   safety: SafetyGuidelinesStatus;
 }
@@ -80,6 +82,24 @@ export async function changeUserDisplayName(displayName: string): Promise<AppUse
     credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ displayName })
+  });
+  if (!res.ok) {
+    throw new Error(await parseError(res));
+  }
+  return (await res.json()) as AppUser;
+}
+
+/**
+ * Changes the account's avatar to an entry from the built-in set. The server
+ * validates the selection and enforces the once-per-day limit, surfacing a
+ * human-readable error otherwise.
+ */
+export async function changeUserAvatar(avatarId: string, backgroundColor: string): Promise<AppUser> {
+  const res = await fetch(`${API_URL}/auth/avatar`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ avatarId, backgroundColor })
   });
   if (!res.ok) {
     throw new Error(await parseError(res));

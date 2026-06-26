@@ -1,7 +1,8 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { BadRequestException, ConflictException, Inject, Injectable, UnauthorizedException } from "@nestjs/common";
-import { productConfig } from "@fahhhchat/config";
+import { productConfig, resolveAvatarSelection } from "@fahhhchat/config";
 import { generateDisplayIdentity } from "../identity/display-identity";
+import { avatarChangeStatus } from "../identity/avatar-change";
 import { displayNameChangeStatus } from "../identity/display-name-change";
 import { moderateDisplayName } from "../identity/username-moderation";
 import { SESSION_STORE } from "./session.types";
@@ -134,6 +135,38 @@ export class GuestSessionService {
     return this.toSummary(record);
   }
 
+  /**
+   * Changes the session's avatar to another entry from the safe built-in set
+   * (story 19). Enforces the once-per-day cooldown and validates the selection
+   * against the allow-list — no uploads, so set-membership is the only check
+   * (story 20). The display name is unaffected. Best-effort session-scoped rate
+   * limiting via the cooldown on the (Redis-backed) session record (story 21).
+   */
+  async changeAvatar(
+    token: string | undefined,
+    rawAvatarId: unknown,
+    rawBackgroundColor: unknown
+  ): Promise<GuestSessionSummary> {
+    const record = await this.resolveRecord(token);
+    if (!record) {
+      throw new UnauthorizedException("Confirm your age and accept the terms before continuing.");
+    }
+
+    if (!avatarChangeStatus(record.avatarUpdatedAt).allowed) {
+      throw new ConflictException("You can only change your avatar once a day. Try again later.");
+    }
+
+    const avatar = resolveAvatarSelection(rawAvatarId, rawBackgroundColor);
+    if (!avatar) {
+      throw new BadRequestException("Choose an avatar from the built-in set.");
+    }
+
+    record.identity = { ...record.identity, avatar };
+    record.avatarUpdatedAt = new Date().toISOString();
+    await this.store.save(record);
+    return this.toSummary(record);
+  }
+
   /** Safety gate status for a cookie value, or null if there is no valid session. */
   async getSafetyStatus(token: string | undefined): Promise<SafetyGuidelinesStatus | null> {
     const record = await this.resolveRecord(token);
@@ -186,6 +219,7 @@ export class GuestSessionService {
       acceptedAt: record.acceptedAt,
       identity: record.identity,
       displayNameChange: displayNameChangeStatus(record.displayNameUpdatedAt),
+      avatarChange: avatarChangeStatus(record.avatarUpdatedAt),
       safety: this.safetyStatus(record)
     };
   }

@@ -6,6 +6,7 @@ import { Button, ButtonLink, Eyebrow, Surface } from "@fahhhchat/ui";
 import { productConfig } from "@fahhhchat/config";
 import {
   acceptUserLegal,
+  changeUserAvatar,
   changeUserDisplayName,
   establishBackendSession,
   fetchAppUser,
@@ -13,6 +14,7 @@ import {
   type AppUser
 } from "../../lib/auth-api";
 import { DisplayNameEditor } from "../../components/DisplayNameEditor";
+import { AvatarEditor } from "../../components/AvatarEditor";
 
 const WWW_URL = process.env.NEXT_PUBLIC_WWW_URL ?? "http://localhost:3000";
 const DEV_MODE = process.env.NEXT_PUBLIC_AUTH_DEV_MODE === "true";
@@ -210,6 +212,13 @@ export default function LoginPage() {
                 change={user.displayNameChange}
                 onSave={async (displayName) => {
                   setUser(await changeUserDisplayName(displayName));
+                }}
+              />
+              <AvatarEditor
+                identity={user.identity}
+                change={user.avatarChange}
+                onSave={async (avatarId, backgroundColor) => {
+                  setUser(await changeUserAvatar(avatarId, backgroundColor));
                 }}
               />
               <p>
