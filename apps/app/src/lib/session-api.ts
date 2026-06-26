@@ -1,3 +1,5 @@
+import type { DisplayIdentity } from "@fahhhchat/config";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 export type SafetyGuidelinesReason = "first_time" | "version_changed" | "enforcement";
@@ -13,6 +15,8 @@ export interface GuestAcceptance {
   accepted: true;
   legalVersion: string;
   acceptedAt: string;
+  /** Generated anonymous name + avatar for this guest session. */
+  identity: DisplayIdentity;
   safety: SafetyGuidelinesStatus;
 }
 

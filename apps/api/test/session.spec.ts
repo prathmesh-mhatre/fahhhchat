@@ -42,6 +42,11 @@ describe("Session gate (e2e)", () => {
     const res = await acceptCookie().expect(200);
 
     expect(res.body).toMatchObject({ accepted: true, legalVersion: productConfig.legalVersion });
+    // A generated anonymous identity is surfaced to the client (stories 13, 15).
+    expect(res.body.identity).toMatchObject({
+      displayName: expect.any(String),
+      avatar: { avatarId: expect.any(String), backgroundColor: expect.any(String) }
+    });
     const setCookie = res.headers["set-cookie"][0];
     expect(setCookie).toContain("fc_guest=");
     expect(setCookie.toLowerCase()).toContain("httponly");

@@ -1,8 +1,16 @@
+import type { DisplayIdentity } from "@fahhhchat/config";
+
 export interface GuestSessionRecord {
   sessionId: string;
   legalVersion: string;
   ageConfirmed: boolean;
   acceptedAt: string;
+  /**
+   * Anonymous generated name + avatar, assigned at acceptance and scoped to this
+   * guest session — it lives and dies with the session, never persisted beyond
+   * it (story 23). Other users see this instead of any real identity (story 15).
+   */
+  identity: DisplayIdentity;
   /** Safety guidelines version the user last accepted, or undefined if never. */
   safetyGuidelinesVersion?: string;
   safetyGuidelinesAcceptedAt?: string;
@@ -29,6 +37,8 @@ export interface GuestSessionSummary {
   accepted: true;
   legalVersion: string;
   acceptedAt: string;
+  /** The session's generated display name + avatar (stories 13, 15, 23). */
+  identity: DisplayIdentity;
   safety: SafetyGuidelinesStatus;
 }
 

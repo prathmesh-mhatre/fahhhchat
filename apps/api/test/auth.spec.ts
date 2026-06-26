@@ -38,6 +38,11 @@ describe("Auth (e2e)", () => {
     const res = await login().expect(200);
 
     expect(res.body).toMatchObject({ loggedIn: true, userId: expect.any(String) });
+    // A generated identity is returned in place of the Google identity (story 14).
+    expect(res.body.identity).toMatchObject({
+      displayName: expect.any(String),
+      avatar: { avatarId: expect.any(String), backgroundColor: expect.any(String) }
+    });
     expect(JSON.stringify(res.body)).not.toContain("e2e@example.com");
 
     const setCookie = res.headers["set-cookie"][0];

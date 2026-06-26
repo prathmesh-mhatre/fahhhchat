@@ -11,6 +11,7 @@ import {
   logoutBackendSession,
   type AppUser
 } from "../../lib/auth-api";
+import { IdentityBadge } from "../../components/IdentityBadge";
 
 const WWW_URL = process.env.NEXT_PUBLIC_WWW_URL ?? "http://localhost:3000";
 const DEV_MODE = process.env.NEXT_PUBLIC_AUTH_DEV_MODE === "true";
@@ -199,9 +200,14 @@ export default function LoginPage() {
               <Eyebrow className="eyebrow">You&apos;re signed in</Eyebrow>
               <h1 id="login-title">Signed in privately</h1>
               <p>
-                Your account is ready. You&apos;re known internally as{" "}
-                <code>{user.userId}</code> — a pseudonymous id used for matching and analytics, not
-                your Google identity. Preferences and entitlements persist across sessions.
+                Strangers see this generated name and avatar — never your Google name, email, or
+                photo. It persists with your account across sessions.
+              </p>
+              <IdentityBadge identity={user.identity} />
+              <p>
+                You&apos;re known internally as <code>{user.userId}</code> — a pseudonymous id used
+                for matching and analytics, not your Google identity. Preferences and entitlements
+                persist across sessions.
               </p>
               <div className="actions">
                 <ButtonLink href="/guest" variant="secondary">
