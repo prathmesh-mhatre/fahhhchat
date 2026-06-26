@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { BadRequestException, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, ConflictException, UnauthorizedException } from "@nestjs/common";
 import { productConfig } from "@fahhhchat/config";
 import { AuthService } from "./auth.service";
 import { InMemoryUserStore } from "./in-memory-user.store";
@@ -137,6 +137,54 @@ describe("AuthService", () => {
 
     await service.acceptSafety(token, productConfig.safetyGuidelinesVersion);
     expect((await service.getUser(token))!.safety).toMatchObject({ required: false, reason: null });
+  });
+
+  describe("display-name change (stories 16-18)", () => {
+    it("renames the account, persists across logins, and starts the cooldown (stories 16, 22)", async () => {
+      const { token } = await service.loginWithGoogle(aliceToken);
+
+      const summary = await service.changeDisplayName(token, "  Velvet   Sparrow ");
+      expect(summary.identity.displayName).toBe("Velvet Sparrow");
+      expect(summary.displayNameChange.allowed).toBe(false);
+
+      // The new name persists with the account across a fresh login.
+      const relogin = await service.loginWithGoogle(aliceToken);
+      expect(relogin.summary.identity.displayName).toBe("Velvet Sparrow");
+      expect(relogin.summary.displayNameChange.allowed).toBe(false);
+    });
+
+    it("moderates the proposed name before saving (story 17-18)", async () => {
+      const { token } = await service.loginWithGoogle(aliceToken);
+      await expect(service.changeDisplayName(token, "admin")).rejects.toBeInstanceOf(
+        BadRequestException
+      );
+      // The rejected attempt did not consume the once-per-day allowance.
+      expect((await service.getUser(token))!.displayNameChange.allowed).toBe(true);
+    });
+
+    it("enforces once-per-day and allows again after the window elapses", async () => {
+      const { token, summary } = await service.loginWithGoogle(aliceToken);
+      await service.changeDisplayName(token, "Amber Glacier");
+      await expect(service.changeDisplayName(token, "Lucky Cipher")).rejects.toBeInstanceOf(
+        ConflictException
+      );
+
+      // Simulate the last change happening just over a day ago.
+      const record = (await store.get(summary.userId))!;
+      record.displayNameUpdatedAt = new Date(
+        Date.now() - (productConfig.displayNameChangeCooldownHours + 1) * 3600_000
+      ).toISOString();
+      await store.save(record);
+
+      const after = await service.changeDisplayName(token, "Lucky Cipher");
+      expect(after.identity.displayName).toBe("Lucky Cipher");
+    });
+
+    it("requires a session", async () => {
+      await expect(service.changeDisplayName(undefined, "Brave Otter")).rejects.toBeInstanceOf(
+        UnauthorizedException
+      );
+    });
   });
 
   it("returns null and rejects for missing or tampered app tokens", async () => {

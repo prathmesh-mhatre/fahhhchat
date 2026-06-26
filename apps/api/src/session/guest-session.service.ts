@@ -1,7 +1,9 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import { BadRequestException, Inject, Injectable, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Inject, Injectable, UnauthorizedException } from "@nestjs/common";
 import { productConfig } from "@fahhhchat/config";
 import { generateDisplayIdentity } from "../identity/display-identity";
+import { displayNameChangeStatus } from "../identity/display-name-change";
+import { moderateDisplayName } from "../identity/username-moderation";
 import { SESSION_STORE } from "./session.types";
 import type {
   GuestSessionRecord,
@@ -105,6 +107,33 @@ export class GuestSessionService {
     return this.toSummary(record);
   }
 
+  /**
+   * Changes the session's generated display name (story 16). Enforces the
+   * once-per-day cooldown and moderates the proposed name before saving
+   * (stories 17-18); the avatar is unaffected. Best-effort session-scoped rate
+   * limiting — the cooldown lives on the (Redis-backed) session record.
+   */
+  async changeDisplayName(token: string | undefined, rawName: unknown): Promise<GuestSessionSummary> {
+    const record = await this.resolveRecord(token);
+    if (!record) {
+      throw new UnauthorizedException("Confirm your age and accept the terms before continuing.");
+    }
+
+    if (!displayNameChangeStatus(record.displayNameUpdatedAt).allowed) {
+      throw new ConflictException("You can only change your name once a day. Try again later.");
+    }
+
+    const result = moderateDisplayName(rawName);
+    if (!result.ok) {
+      throw new BadRequestException(result.message);
+    }
+
+    record.identity = { ...record.identity, displayName: result.value };
+    record.displayNameUpdatedAt = new Date().toISOString();
+    await this.store.save(record);
+    return this.toSummary(record);
+  }
+
   /** Safety gate status for a cookie value, or null if there is no valid session. */
   async getSafetyStatus(token: string | undefined): Promise<SafetyGuidelinesStatus | null> {
     const record = await this.resolveRecord(token);
@@ -156,6 +185,7 @@ export class GuestSessionService {
       legalVersion: record.legalVersion,
       acceptedAt: record.acceptedAt,
       identity: record.identity,
+      displayNameChange: displayNameChangeStatus(record.displayNameUpdatedAt),
       safety: this.safetyStatus(record)
     };
   }

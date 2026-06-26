@@ -1,7 +1,9 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
-import { BadRequestException, Inject, Injectable, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Inject, Injectable, UnauthorizedException } from "@nestjs/common";
 import { productConfig } from "@fahhhchat/config";
 import { generateDisplayIdentity } from "../identity/display-identity";
+import { displayNameChangeStatus } from "../identity/display-name-change";
+import { moderateDisplayName } from "../identity/username-moderation";
 import type { SafetyGuidelinesStatus } from "../session/session.types";
 import {
   GOOGLE_TOKEN_VERIFIER,
@@ -115,6 +117,29 @@ export class AuthService {
     return this.toSummary(record);
   }
 
+  /**
+   * Changes the account's display name (story 16). Enforces the once-per-day
+   * cooldown and moderates the proposed name before saving (stories 17-18). The
+   * cooldown timestamp persists on the account, so it survives logout/login.
+   */
+  async changeDisplayName(token: string | undefined, rawName: unknown): Promise<UserSummary> {
+    const record = await this.requireRecord(token);
+
+    if (!displayNameChangeStatus(record.displayNameUpdatedAt).allowed) {
+      throw new ConflictException("You can only change your name once a day. Try again later.");
+    }
+
+    const result = moderateDisplayName(rawName);
+    if (!result.ok) {
+      throw new BadRequestException(result.message);
+    }
+
+    record.identity = { ...(record.identity ?? generateDisplayIdentity()), displayName: result.value };
+    record.displayNameUpdatedAt = new Date().toISOString();
+    await this.store.save(record);
+    return this.toSummary(record);
+  }
+
   /** Flag the account to re-show safety guidelines next visit (enforcement hook). */
   async flagSafetyReprompt(token: string | undefined): Promise<UserSummary> {
     const record = await this.requireRecord(token);
@@ -171,6 +196,7 @@ export class AuthService {
       // resolveRecord guarantees a backfilled identity; fall back defensively for
       // any record constructed outside that path.
       identity: record.identity ?? generateDisplayIdentity(),
+      displayNameChange: displayNameChangeStatus(record.displayNameUpdatedAt),
       legal: this.legalStatus(record),
       safety: this.safetyStatus(record)
     };

@@ -70,6 +70,43 @@ describe("Auth (e2e)", () => {
     expect(after.body.legal.required).toBe(false);
   });
 
+  it("changes the display name once, moderates it, and enforces the cooldown (stories 16-18)", async () => {
+    const cookie = (await login().expect(200)).headers["set-cookie"];
+
+    // Unsafe name rejected with 400.
+    await request(app.getHttpServer())
+      .post("/auth/username")
+      .set("Cookie", cookie)
+      .send({ displayName: "support" })
+      .expect(400);
+
+    // Safe name accepted and surfaced.
+    const renamed = await request(app.getHttpServer())
+      .post("/auth/username")
+      .set("Cookie", cookie)
+      .send({ displayName: "Nimble Marble" })
+      .expect(200);
+    expect(renamed.body.identity.displayName).toBe("Nimble Marble");
+
+    // Persisted on /auth/me.
+    const me = await request(app.getHttpServer()).get("/auth/me").set("Cookie", cookie).expect(200);
+    expect(me.body.identity.displayName).toBe("Nimble Marble");
+
+    // Second change within the day blocked (409).
+    await request(app.getHttpServer())
+      .post("/auth/username")
+      .set("Cookie", cookie)
+      .send({ displayName: "Jolly Thistle" })
+      .expect(409);
+  });
+
+  it("rejects a username change without a session (guard enforced)", async () => {
+    await request(app.getHttpServer())
+      .post("/auth/username")
+      .send({ displayName: "Brave Otter" })
+      .expect(401);
+  });
+
   it("rejects legal acceptance without a session (guard enforced)", async () => {
     await request(app.getHttpServer())
       .post("/auth/legal/accept")

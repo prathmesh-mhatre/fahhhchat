@@ -2,15 +2,16 @@
 
 import { useEffect, useState } from "react";
 import { Button, ButtonLink, Eyebrow, Surface } from "@fahhhchat/ui";
-import { productConfig, type DisplayIdentity } from "@fahhhchat/config";
+import { productConfig } from "@fahhhchat/config";
 import {
   acceptGuestLegal,
   acceptGuestSafety,
+  changeGuestDisplayName,
   fetchGuestSession,
   type GuestAcceptance,
   type SafetyGuidelinesReason
 } from "../../lib/session-api";
-import { IdentityBadge } from "../../components/IdentityBadge";
+import { DisplayNameEditor } from "../../components/DisplayNameEditor";
 
 const WWW_URL = process.env.NEXT_PUBLIC_WWW_URL ?? "http://localhost:3000";
 
@@ -48,7 +49,7 @@ function safetyIntro(reason: SafetyGuidelinesReason | null): { heading: string; 
 
 export default function GuestEntryPage() {
   const [state, setState] = useState<GateState>("loading");
-  const [identity, setIdentity] = useState<DisplayIdentity | null>(null);
+  const [session, setSession] = useState<GuestAcceptance | null>(null);
   const [safetyReason, setSafetyReason] = useState<SafetyGuidelinesReason | null>(null);
   const [isAdult, setIsAdult] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
@@ -61,7 +62,7 @@ export default function GuestEntryPage() {
       setState("legal");
       return;
     }
-    setIdentity(session.identity);
+    setSession(session);
     if (session.safety.required) {
       setSafetyReason(session.safety.reason);
       setState("safety");
@@ -225,15 +226,21 @@ export default function GuestEntryPage() {
             </>
           )}
 
-          {state === "ready" && (
+          {state === "ready" && session && (
             <>
               <Eyebrow className="eyebrow">You're in</Eyebrow>
               <h1 id="guest-title">Ready to match</h1>
               <p>
                 This is the anonymous name and avatar strangers will see — no setup needed. It stays
-                with you for this browser session only.
+                with you for this browser session only. You can rename it once a day.
               </p>
-              {identity && <IdentityBadge identity={identity} />}
+              <DisplayNameEditor
+                identity={session.identity}
+                change={session.displayNameChange}
+                onSave={async (displayName) => {
+                  setSession(await changeGuestDisplayName(displayName));
+                }}
+              />
               <p>
                 Your acceptance is saved for this browser session. Random matching arrives in a later
                 slice — this is where the queue will begin.
