@@ -6,9 +6,9 @@ import type { FeatureFlagKey } from "@fahhhchat/config";
  * a row is written only when an operator flips a kill switch, so the store holds
  * the small set of surfaces that have ever been toggled rather than every key.
  *
- * `updatedBy` records who made the change for the audit trail. This slice
- * captures it on the record; the durable audit log and admin attribution land
- * with issue #16 / the admin slices, so it is nullable for system/seed changes.
+ * `updatedBy` records who made the change for the audit trail. It is nullable
+ * for system/seed changes; full admin attribution lands with the admin slices
+ * (#34-37).
  */
 export interface FeatureFlagRecord {
   key: FeatureFlagKey;
@@ -70,8 +70,10 @@ export const FEATURE_FLAG_AUDIT_LOG = Symbol("FEATURE_FLAG_AUDIT_LOG");
 
 /**
  * How long a read of the merged flag state is cached in-process before the store
- * is consulted again (story 85: cache feature flag reads). Kept short so a kill
- * switch flipped directly in the store still takes effect quickly; *immediate*
- * invalidation on write — and the audit log — arrive with issue #16.
+ * is consulted again (story 85: cache feature flag reads). A write through
+ * {@link FeatureFlagsService.setEnabled} invalidates the cache immediately
+ * (issue #16), so this TTL is the backstop for out-of-band changes: a switch
+ * flipped directly in the store, or by another API instance once the store is
+ * shared. Kept short so that cross-instance staleness window stays small.
  */
 export const FEATURE_FLAG_CACHE_TTL_MS = 30_000;

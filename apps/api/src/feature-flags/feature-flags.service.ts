@@ -26,10 +26,11 @@ interface CachedState {
  * (queue entry, guest acceptance) don't hit the store on every request.
  *
  * Every change is written through the {@link FeatureFlagAuditLog} so flag
- * changes are durable and traceable (story 85). The cache here is purely
- * time-based; *immediate* invalidation on a write is the remaining piece left to
- * issue #16, which is why a write still goes through the store rather than
- * mutating the cache in place.
+ * changes are durable and traceable (story 85). A write also invalidates the
+ * in-process cache (issue #16) so a flipped kill switch takes effect on the very
+ * next read instead of lingering for up to {@link FEATURE_FLAG_CACHE_TTL_MS}; the
+ * TTL remains the backstop for changes made out-of-band (directly in the store,
+ * or on another API instance).
  */
 @Injectable()
 export class FeatureFlagsService {
@@ -56,6 +57,15 @@ export class FeatureFlagsService {
     return this.merge(await this.store.getAll());
   }
 
+  /**
+   * Drop the cached read so the next {@link getState} re-reads the store. Called
+   * after a write (issue #16) so an operator flipping a kill switch sees it take
+   * effect immediately rather than waiting out {@link FEATURE_FLAG_CACHE_TTL_MS}.
+   */
+  private invalidateCache(): void {
+    this.cache = null;
+  }
+
   /** Whether a given surface is currently enabled. */
   async isEnabled(key: FeatureFlagKey): Promise<boolean> {
     return (await this.getState())[key];
@@ -74,11 +84,10 @@ export class FeatureFlagsService {
 
   /**
    * Persist a kill-switch change and record it in the audit trail so the change
-   * is durable and traceable (story 85). Returns the stored record. The cached
-   * read is not invalidated here — it expires within
-   * {@link FEATURE_FLAG_CACHE_TTL_MS}; immediate invalidation is issue #16. Admin
-   * authorization for who may call this lands with the admin slices (#34-37);
-   * `actor` carries attribution for the audit entry.
+   * is durable and traceable (story 85), then invalidate the read cache so the
+   * new value is visible on the next read (issue #16). Returns the stored record.
+   * Admin authorization for who may call this lands with the admin slices
+   * (#34-37); `actor` carries attribution for the audit entry.
    */
   async setEnabled(
     key: FeatureFlagKey,
@@ -97,6 +106,10 @@ export class FeatureFlagsService {
       actor: record.updatedBy,
       changedAt: record.updatedAt
     });
+    // Evict the now-stale read so a flipped switch takes effect immediately. The
+    // audit write above is durable, so an invalidation failing to land would be
+    // the only stale window — kept last and synchronous to avoid that.
+    this.invalidateCache();
     return record;
   }
 
