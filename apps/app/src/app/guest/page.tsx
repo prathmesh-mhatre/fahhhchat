@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Button, ButtonLink, Eyebrow, Surface } from "@fahhhchat/ui";
-import { productConfig } from "@fahhhchat/config";
+import { productConfig, type DisplayIdentity } from "@fahhhchat/config";
 import {
   acceptGuestLegal,
   acceptGuestSafety,
@@ -10,6 +10,7 @@ import {
   type GuestAcceptance,
   type SafetyGuidelinesReason
 } from "../../lib/session-api";
+import { IdentityBadge } from "../../components/IdentityBadge";
 
 const WWW_URL = process.env.NEXT_PUBLIC_WWW_URL ?? "http://localhost:3000";
 
@@ -47,6 +48,7 @@ function safetyIntro(reason: SafetyGuidelinesReason | null): { heading: string; 
 
 export default function GuestEntryPage() {
   const [state, setState] = useState<GateState>("loading");
+  const [identity, setIdentity] = useState<DisplayIdentity | null>(null);
   const [safetyReason, setSafetyReason] = useState<SafetyGuidelinesReason | null>(null);
   const [isAdult, setIsAdult] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
@@ -59,6 +61,7 @@ export default function GuestEntryPage() {
       setState("legal");
       return;
     }
+    setIdentity(session.identity);
     if (session.safety.required) {
       setSafetyReason(session.safety.reason);
       setState("safety");
@@ -226,6 +229,11 @@ export default function GuestEntryPage() {
             <>
               <Eyebrow className="eyebrow">You're in</Eyebrow>
               <h1 id="guest-title">Ready to match</h1>
+              <p>
+                This is the anonymous name and avatar strangers will see — no setup needed. It stays
+                with you for this browser session only.
+              </p>
+              {identity && <IdentityBadge identity={identity} />}
               <p>
                 Your acceptance is saved for this browser session. Random matching arrives in a later
                 slice — this is where the queue will begin.

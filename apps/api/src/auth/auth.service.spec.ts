@@ -1,8 +1,15 @@
+import { createHmac } from "node:crypto";
 import { BadRequestException, UnauthorizedException } from "@nestjs/common";
 import { productConfig } from "@fahhhchat/config";
 import { AuthService } from "./auth.service";
 import { InMemoryUserStore } from "./in-memory-user.store";
 import { DevMockTokenVerifier, encodeMockGoogleToken } from "./google-token-verifier";
+
+/** Mint a valid app token for a user id, mirroring AuthService's signing scheme. */
+function mintTokenFor(secret: string, userId: string): string {
+  const signature = createHmac("sha256", secret).update(`user:${userId}`).digest("base64url");
+  return `${userId}.${signature}`;
+}
 
 describe("AuthService", () => {
   let store: InMemoryUserStore;
@@ -54,6 +61,36 @@ describe("AuthService", () => {
     expect(second.summary.userId).toBe(first.summary.userId);
     expect(second.summary.legal.required).toBe(false);
     expect(second.summary.safety.required).toBe(false);
+  });
+
+  it("assigns a generated identity that persists across logins, never the Google identity (stories 14, 22)", async () => {
+    const first = await service.loginWithGoogle(aliceToken);
+    expect(first.summary.identity.displayName).toEqual(expect.any(String));
+    expect(first.summary.identity.avatar.avatarId).toEqual(expect.any(String));
+    // The generated identity must not embed the Google identity.
+    expect(JSON.stringify(first.summary.identity)).not.toContain("alice");
+
+    const second = await service.loginWithGoogle(aliceToken);
+    expect(second.summary.identity).toEqual(first.summary.identity);
+  });
+
+  it("backfills a generated identity for accounts created before this slice", async () => {
+    // Simulate a legacy record persisted without an identity.
+    await store.save({
+      userId: "legacy-user",
+      googleSub: "google-legacy",
+      email: "legacy@example.com",
+      createdAt: new Date().toISOString(),
+      lastLoginAt: new Date().toISOString()
+    });
+    const token = mintTokenFor("test-secret", "legacy-user");
+
+    const user = await service.getUser(token);
+    expect(user!.identity.displayName).toEqual(expect.any(String));
+
+    // Backfill is persisted, so it stays stable on the next read.
+    const again = await service.getUser(token);
+    expect(again!.identity).toEqual(user!.identity);
   });
 
   it("gives different Google accounts different internal ids", async () => {

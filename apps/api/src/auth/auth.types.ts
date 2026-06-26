@@ -18,6 +18,13 @@ export interface UserRecord {
   email: string;
   createdAt: string;
   lastLoginAt: string;
+  /**
+   * Anonymous generated name + avatar shown to matched strangers instead of the
+   * Google identity (story 14). Persisted on the account so it stays stable
+   * across logins/sessions (story 22). Optional only so accounts created before
+   * this slice can be backfilled on next login.
+   */
+  identity?: DisplayIdentity;
   /** Persisted legal/age acceptance for the account (story 22). */
   legalVersion?: string;
   ageConfirmed?: boolean;
@@ -29,6 +36,7 @@ export interface UserRecord {
   safetyRepromptRequired?: boolean;
 }
 
+import type { DisplayIdentity } from "@fahhhchat/config";
 import type { SafetyGuidelinesStatus } from "../session/session.types";
 
 /** Whether the logged-in user still owes legal/age acceptance. */
@@ -46,6 +54,8 @@ export interface LegalAcceptanceStatus {
 export interface UserSummary {
   loggedIn: true;
   userId: string;
+  /** Generated display name + avatar shown in place of Google identity (story 14). */
+  identity: DisplayIdentity;
   legal: LegalAcceptanceStatus;
   safety: SafetyGuidelinesStatus;
 }

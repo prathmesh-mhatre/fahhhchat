@@ -1,6 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { BadRequestException, Inject, Injectable, UnauthorizedException } from "@nestjs/common";
 import { productConfig } from "@fahhhchat/config";
+import { generateDisplayIdentity } from "../identity/display-identity";
 import { SESSION_STORE } from "./session.types";
 import type {
   GuestSessionRecord,
@@ -50,7 +51,8 @@ export class GuestSessionService {
       sessionId: randomUUID(),
       legalVersion: productConfig.legalVersion,
       ageConfirmed: true,
-      acceptedAt: new Date().toISOString()
+      acceptedAt: new Date().toISOString(),
+      identity: generateDisplayIdentity()
     };
     await this.store.save(record);
 
@@ -153,6 +155,7 @@ export class GuestSessionService {
       accepted: true,
       legalVersion: record.legalVersion,
       acceptedAt: record.acceptedAt,
+      identity: record.identity,
       safety: this.safetyStatus(record)
     };
   }

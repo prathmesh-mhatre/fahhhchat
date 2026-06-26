@@ -1,6 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { BadRequestException, Inject, Injectable, UnauthorizedException } from "@nestjs/common";
 import { productConfig } from "@fahhhchat/config";
+import { generateDisplayIdentity } from "../identity/display-identity";
 import type { SafetyGuidelinesStatus } from "../session/session.types";
 import {
   GOOGLE_TOKEN_VERIFIER,
@@ -53,13 +54,16 @@ export class AuthService {
     const now = new Date().toISOString();
     const existing = await this.store.findByGoogleSub(identity.sub);
     const record: UserRecord = existing
-      ? { ...existing, email: identity.email, lastLoginAt: now }
+      ? // Keep the existing generated identity stable across logins (story 22),
+        // but backfill it for accounts created before this slice.
+        { ...existing, email: identity.email, lastLoginAt: now, identity: existing.identity ?? generateDisplayIdentity() }
       : {
           userId: randomUUID(),
           googleSub: identity.sub,
           email: identity.email,
           createdAt: now,
-          lastLoginAt: now
+          lastLoginAt: now,
+          identity: generateDisplayIdentity()
         };
     await this.store.save(record);
 
@@ -139,7 +143,17 @@ export class AuthService {
 
   private async resolveRecord(token: string | undefined): Promise<UserRecord | null> {
     const userId = this.verify(token);
-    return userId ? this.store.get(userId) : null;
+    if (!userId) {
+      return null;
+    }
+    const record = await this.store.get(userId);
+    // Backfill a generated identity for accounts persisted before this slice so
+    // every resolved record carries a stable display identity.
+    if (record && !record.identity) {
+      record.identity = generateDisplayIdentity();
+      await this.store.save(record);
+    }
+    return record;
   }
 
   private async requireRecord(token: string | undefined): Promise<UserRecord> {
@@ -154,6 +168,9 @@ export class AuthService {
     return {
       loggedIn: true,
       userId: record.userId,
+      // resolveRecord guarantees a backfilled identity; fall back defensively for
+      // any record constructed outside that path.
+      identity: record.identity ?? generateDisplayIdentity(),
       legal: this.legalStatus(record),
       safety: this.safetyStatus(record)
     };

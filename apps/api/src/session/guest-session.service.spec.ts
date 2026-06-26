@@ -39,6 +39,10 @@ describe("GuestSessionService", () => {
       accepted: true,
       legalVersion: productConfig.legalVersion,
       acceptedAt: expect.any(String),
+      identity: {
+        displayName: expect.any(String),
+        avatar: { avatarId: expect.any(String), backgroundColor: expect.any(String) }
+      },
       safety: {
         required: true,
         currentVersion: productConfig.safetyGuidelinesVersion,
@@ -49,6 +53,21 @@ describe("GuestSessionService", () => {
 
     const resolved = await service.getSession(token);
     expect(resolved).toEqual(summary);
+  });
+
+  it("assigns a session-scoped generated identity that stays stable for the session (stories 13, 23)", async () => {
+    const { token, summary } = await service.accept({
+      ageConfirmed: true,
+      legalVersion: productConfig.legalVersion
+    });
+
+    expect(summary.identity.displayName).toEqual(expect.any(String));
+    expect(summary.identity.avatar.avatarId).toEqual(expect.any(String));
+
+    // The same session keeps the same identity across reads (it is persisted on
+    // the session record, not regenerated per request).
+    const resolved = await service.getSession(token);
+    expect(resolved!.identity).toEqual(summary.identity);
   });
 
   it("returns null for a missing or tampered token", async () => {

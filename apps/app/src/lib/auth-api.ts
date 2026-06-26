@@ -1,3 +1,5 @@
+import type { DisplayIdentity } from "@fahhhchat/config";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 export interface LegalAcceptanceStatus {
@@ -17,6 +19,8 @@ export interface SafetyGuidelinesStatus {
 export interface AppUser {
   loggedIn: true;
   userId: string;
+  /** Generated anonymous name + avatar shown in place of Google identity. */
+  identity: DisplayIdentity;
   legal: LegalAcceptanceStatus;
   safety: SafetyGuidelinesStatus;
 }
