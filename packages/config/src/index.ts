@@ -11,6 +11,23 @@ export const productConfig = {
   reconnectGraceSeconds: 25,
   nextConfirmSeconds: 3,
   /**
+   * Maximum length (characters) of a single realtime chat message (issue #21).
+   * The API rejects anything longer than this so an oversized or runaway message
+   * can never be delivered or buffered; the web app uses the same bound to cap
+   * its composer and show a remaining-characters hint. Shared because both sides
+   * must agree on the limit the API enforces.
+   */
+  chatMessageMaxLength: 2000,
+  /**
+   * How many of the most recent messages an active match keeps in its ephemeral,
+   * match-scoped buffer (issue #21, story 46). The buffer exists only so the
+   * realtime layer has the recent conversation in hand while the match is live;
+   * it is dropped the moment the match ends, so chat history never persists. Kept
+   * small — a rolling window, not durable history — because the product is
+   * intentionally ephemeral and the report-context buffer (issue #29) is separate.
+   */
+  chatBufferMaxMessages: 50,
+  /**
    * How long a waiting user holds out for a same-matching-language partner before
    * the pool relaxes and pairs them across languages (story 36). Kept short so
    * wait times stay low while still preferring a relevant match initially; the

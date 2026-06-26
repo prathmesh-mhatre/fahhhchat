@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
+import { ChatModule } from "../chat/chat.module";
 import { FeatureFlagsModule } from "../feature-flags/feature-flags.module";
 import { RateLimitModule } from "../rate-limit/rate-limit.module";
 import { InMemoryMatchmakingQueue } from "./in-memory-matchmaking.queue";
@@ -32,12 +33,13 @@ function createMatchmakingQueue(): MatchmakingQueue {
  * gateway can read a logged-in joiner's declared gender + filter for gender
  * matching (stories 30-32, issue #19). Imports {@link RateLimitModule} so queue
  * joins are throttled per identity, stricter for guests (stories 142-144, issue
- * #20). The gateway shares the Socket.IO server stood up by the realtime slice;
- * no extra wiring is needed because Nest attaches every gateway on the same port
- * to one server.
+ * #20). Imports {@link ChatModule} so the gateway can register the active match
+ * with the chat layer the instant a pair is created (issue #21). The gateway
+ * shares the Socket.IO server stood up by the realtime slice; no extra wiring is
+ * needed because Nest attaches every gateway on the same port to one server.
  */
 @Module({
-  imports: [FeatureFlagsModule, AuthModule, RateLimitModule],
+  imports: [FeatureFlagsModule, AuthModule, RateLimitModule, ChatModule],
   controllers: [MatchmakingController],
   providers: [
     MatchmakingService,

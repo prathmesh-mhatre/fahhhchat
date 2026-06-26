@@ -8,6 +8,7 @@ import {
 import type { Server, Socket } from "socket.io";
 import { resolveLanguage } from "@fahhhchat/config";
 import { AuthService } from "../auth/auth.service";
+import { ChatService } from "../chat/chat.service";
 import { webOrigins } from "../cors-origins";
 import type { AuthenticatedSocketData } from "../realtime/realtime.gateway";
 import type { RealtimeIdentity } from "../realtime/realtime.types";
@@ -43,7 +44,8 @@ export class MatchmakingGateway implements OnGatewayDisconnect {
 
   constructor(
     private readonly matchmaking: MatchmakingService,
-    private readonly auth: AuthService
+    private readonly auth: AuthService,
+    private readonly chat: ChatService
   ) {}
 
   @SubscribeMessage(MATCHMAKING_EVENTS.join)
@@ -86,7 +88,7 @@ export class MatchmakingGateway implements OnGatewayDisconnect {
       client.emit(MATCHMAKING_EVENTS.waiting, {});
       return;
     }
-    this.announceMatch(result.match);
+    await this.announceMatch(result.match);
   }
 
   @SubscribeMessage(MATCHMAKING_EVENTS.leave)
@@ -103,8 +105,14 @@ export class MatchmakingGateway implements OnGatewayDisconnect {
     await this.matchmaking.handleDisconnect(client.id);
   }
 
-  /** Tell each side of a new match, with their own role, by socket id. */
-  private announceMatch(match: Match): void {
+  /**
+   * Register the pair with the chat layer, then tell each side of the new match,
+   * with their own role, by socket id. Registration happens *before* the
+   * `match:found` fan-out so the active match already exists when a client sends
+   * its first message on receiving the event — no send can race ahead of routing.
+   */
+  private async announceMatch(match: Match): Promise<void> {
+    await this.chat.registerMatch(match);
     const toInitiator: MatchFoundPayload = {
       matchId: match.matchId,
       role: "initiator",
