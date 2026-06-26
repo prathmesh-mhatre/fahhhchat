@@ -109,6 +109,16 @@ export class GuestSessionService {
     return record ? this.safetyStatus(record) : null;
   }
 
+  /**
+   * Resolve the guest session id for a cookie value, but only when the session
+   * still exists in the store, or null otherwise. Used by the realtime slice to
+   * scope a Socket.IO handshake token to a real, accepted guest session.
+   */
+  async resolveSessionId(token: string | undefined): Promise<string | null> {
+    const record = await this.resolveRecord(token);
+    return record ? record.sessionId : null;
+  }
+
   private async resolveRecord(token: string | undefined): Promise<GuestSessionRecord | null> {
     const sessionId = this.verify(token);
     if (!sessionId) {

@@ -72,6 +72,16 @@ export class AuthService {
     return record ? this.toSummary(record) : null;
   }
 
+  /**
+   * Resolve the internal user id for a valid app token, but only when the
+   * account still exists, or null otherwise. Used by the realtime slice to scope
+   * a Socket.IO handshake token to a real logged-in account.
+   */
+  async resolveUserId(token: string | undefined): Promise<string | null> {
+    const record = await this.resolveRecord(token);
+    return record ? record.userId : null;
+  }
+
   /** Persist the account's legal/age acceptance (story 22). */
   async acceptLegal(token: string | undefined, ageConfirmed: unknown, legalVersion: unknown): Promise<UserSummary> {
     const record = await this.requireRecord(token);
