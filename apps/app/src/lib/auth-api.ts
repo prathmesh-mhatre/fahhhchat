@@ -1,4 +1,4 @@
-import type { DisplayIdentity } from "@fahhhchat/config";
+import type { DisplayIdentity, DisplayNameChangeStatus } from "@fahhhchat/config";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -21,6 +21,8 @@ export interface AppUser {
   userId: string;
   /** Generated anonymous name + avatar shown in place of Google identity. */
   identity: DisplayIdentity;
+  /** Whether the once-per-day display-name change is currently available. */
+  displayNameChange: DisplayNameChangeStatus;
   legal: LegalAcceptanceStatus;
   safety: SafetyGuidelinesStatus;
 }
@@ -61,6 +63,23 @@ export async function acceptUserLegal(legalVersion: string): Promise<AppUser> {
     credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ageConfirmed: true, legalVersion })
+  });
+  if (!res.ok) {
+    throw new Error(await parseError(res));
+  }
+  return (await res.json()) as AppUser;
+}
+
+/**
+ * Changes the account's display name. The server moderates the name and enforces
+ * the once-per-day limit, surfacing a human-readable error otherwise.
+ */
+export async function changeUserDisplayName(displayName: string): Promise<AppUser> {
+  const res = await fetch(`${API_URL}/auth/username`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ displayName })
   });
   if (!res.ok) {
     throw new Error(await parseError(res));

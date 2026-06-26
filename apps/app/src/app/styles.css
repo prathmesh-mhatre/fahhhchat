@@ -206,6 +206,51 @@ p {
   color: var(--fc-color-text);
 }
 
+.name-editor {
+  display: grid;
+  gap: 6px;
+  margin: 18px 0 4px;
+}
+
+.name-editor .identity-card {
+  margin: 0;
+}
+
+.name-editor-form {
+  display: grid;
+  gap: 8px;
+}
+
+.name-editor-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fc-color-muted-text);
+}
+
+.name-editor-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--fc-color-border);
+  border-radius: var(--fc-radius-control, 12px);
+  background: var(--fc-color-surface, #11161d);
+  color: var(--fc-color-text);
+  font: inherit;
+}
+
+.name-editor-input:focus-visible {
+  outline: 2px solid var(--fc-color-accent);
+  outline-offset: 1px;
+}
+
+.name-editor-hint {
+  margin: 2px 0 0;
+  font-size: 0.78rem;
+  color: var(--fc-color-muted-text);
+  line-height: 1.5;
+}
+
 .consent-banner {
   position: fixed;
   inset: auto 16px 16px;

@@ -27,6 +27,10 @@ interface AcceptSafetyBody {
   safetyVersion?: unknown;
 }
 
+interface ChangeDisplayNameBody {
+  displayName?: unknown;
+}
+
 @Controller("auth")
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
@@ -71,6 +75,18 @@ export class AuthController {
   async acceptSafety(@Body() body: AcceptSafetyBody, @Req() req: Request) {
     const token = req.cookies?.[USER_COOKIE_NAME];
     return this.auth.acceptSafety(token, body?.safetyVersion);
+  }
+
+  /**
+   * Changes the account's display name, once per day and after moderation
+   * (stories 16-18). The cooldown persists with the account.
+   */
+  @Post("username")
+  @HttpCode(200)
+  @UseGuards(AuthGuard)
+  async changeDisplayName(@Body() body: ChangeDisplayNameBody, @Req() req: Request) {
+    const token = req.cookies?.[USER_COOKIE_NAME];
+    return this.auth.changeDisplayName(token, body?.displayName);
   }
 
   /** Clears the app session cookie (logout). */

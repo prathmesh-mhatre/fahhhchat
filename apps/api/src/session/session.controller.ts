@@ -25,6 +25,10 @@ interface AcceptSafetyBody {
   safetyVersion?: unknown;
 }
 
+interface ChangeDisplayNameBody {
+  displayName?: unknown;
+}
+
 @Controller("session")
 export class SessionController {
   constructor(private readonly guestSessions: GuestSessionService) {}
@@ -73,6 +77,18 @@ export class SessionController {
   async acceptSafety(@Body() body: AcceptSafetyBody, @Req() req: Request) {
     const token = req.cookies?.[GUEST_COOKIE_NAME];
     return this.guestSessions.acceptSafety(token, body?.safetyVersion);
+  }
+
+  /**
+   * Changes the guest session's display name, once per day and after moderation
+   * (stories 16-18). Requires an accepted legal gate.
+   */
+  @Post("username")
+  @HttpCode(200)
+  @UseGuards(GuestGuard)
+  async changeDisplayName(@Body() body: ChangeDisplayNameBody, @Req() req: Request) {
+    const token = req.cookies?.[GUEST_COOKIE_NAME];
+    return this.guestSessions.changeDisplayName(token, body?.displayName);
   }
 
   /**

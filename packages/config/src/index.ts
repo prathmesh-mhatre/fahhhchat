@@ -9,8 +9,31 @@ export const productConfig = {
    */
   consentVersion: "2026-06-issue-7",
   reconnectGraceSeconds: 25,
-  nextConfirmSeconds: 3
+  nextConfirmSeconds: 3,
+  /**
+   * Display-name editing rules shared by the API (which enforces them) and the
+   * web app (which hints them in the editor). The PRD allows a once-daily
+   * username change for guests and logged-in users (story 16), moderated before
+   * saving (stories 17-18). Length bounds keep names renderable in the chat UI.
+   */
+  displayNameMinLength: 3,
+  displayNameMaxLength: 24,
+  /** Minimum hours between display-name changes — "once per day" (story 16). */
+  displayNameChangeCooldownHours: 24
 } as const;
+
+/**
+ * Whether the user may change their display name right now, surfaced in the
+ * guest/user summaries so the editor can disable itself and explain the wait.
+ * The API is authoritative — this is advisory state for the UI. Lives here
+ * because it is part of the API↔web contract.
+ */
+export interface DisplayNameChangeStatus {
+  /** True when a change is allowed now (no active once-per-day cooldown). */
+  allowed: boolean;
+  /** ISO timestamp when the next change is allowed, or null if allowed now. */
+  nextAllowedAt: string | null;
+}
 
 /**
  * Dev-only contract for simulating a Google login without real OAuth

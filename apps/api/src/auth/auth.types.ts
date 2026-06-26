@@ -25,6 +25,12 @@ export interface UserRecord {
    * this slice can be backfilled on next login.
    */
   identity?: DisplayIdentity;
+  /**
+   * When the account last *changed* its display name (story 16). Undefined while
+   * the name is still the generated default. Drives the once-per-day cooldown
+   * and persists with the account across sessions.
+   */
+  displayNameUpdatedAt?: string;
   /** Persisted legal/age acceptance for the account (story 22). */
   legalVersion?: string;
   ageConfirmed?: boolean;
@@ -36,7 +42,7 @@ export interface UserRecord {
   safetyRepromptRequired?: boolean;
 }
 
-import type { DisplayIdentity } from "@fahhhchat/config";
+import type { DisplayIdentity, DisplayNameChangeStatus } from "@fahhhchat/config";
 import type { SafetyGuidelinesStatus } from "../session/session.types";
 
 /** Whether the logged-in user still owes legal/age acceptance. */
@@ -56,6 +62,8 @@ export interface UserSummary {
   userId: string;
   /** Generated display name + avatar shown in place of Google identity (story 14). */
   identity: DisplayIdentity;
+  /** Whether the once-per-day display-name change is available (story 16). */
+  displayNameChange: DisplayNameChangeStatus;
   legal: LegalAcceptanceStatus;
   safety: SafetyGuidelinesStatus;
 }

@@ -6,12 +6,13 @@ import { Button, ButtonLink, Eyebrow, Surface } from "@fahhhchat/ui";
 import { productConfig } from "@fahhhchat/config";
 import {
   acceptUserLegal,
+  changeUserDisplayName,
   establishBackendSession,
   fetchAppUser,
   logoutBackendSession,
   type AppUser
 } from "../../lib/auth-api";
-import { IdentityBadge } from "../../components/IdentityBadge";
+import { DisplayNameEditor } from "../../components/DisplayNameEditor";
 
 const WWW_URL = process.env.NEXT_PUBLIC_WWW_URL ?? "http://localhost:3000";
 const DEV_MODE = process.env.NEXT_PUBLIC_AUTH_DEV_MODE === "true";
@@ -201,9 +202,16 @@ export default function LoginPage() {
               <h1 id="login-title">Signed in privately</h1>
               <p>
                 Strangers see this generated name and avatar — never your Google name, email, or
-                photo. It persists with your account across sessions.
+                photo. It persists with your account across sessions, and you can rename it once a
+                day.
               </p>
-              <IdentityBadge identity={user.identity} />
+              <DisplayNameEditor
+                identity={user.identity}
+                change={user.displayNameChange}
+                onSave={async (displayName) => {
+                  setUser(await changeUserDisplayName(displayName));
+                }}
+              />
               <p>
                 You&apos;re known internally as <code>{user.userId}</code> — a pseudonymous id used
                 for matching and analytics, not your Google identity. Preferences and entitlements

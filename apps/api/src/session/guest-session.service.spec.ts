@@ -1,4 +1,4 @@
-import { BadRequestException } from "@nestjs/common";
+import { BadRequestException, ConflictException } from "@nestjs/common";
 import { productConfig } from "@fahhhchat/config";
 import { GuestSessionService } from "./guest-session.service";
 import { InMemorySessionStore } from "./in-memory-session.store";
@@ -43,6 +43,7 @@ describe("GuestSessionService", () => {
         displayName: expect.any(String),
         avatar: { avatarId: expect.any(String), backgroundColor: expect.any(String) }
       },
+      displayNameChange: { allowed: true, nextAllowedAt: null },
       safety: {
         required: true,
         currentVersion: productConfig.safetyGuidelinesVersion,
@@ -89,6 +90,73 @@ describe("GuestSessionService", () => {
     });
 
     expect(await service.getSession(token)).toBeNull();
+  });
+
+  describe("display-name change (stories 16-18)", () => {
+    async function newSession() {
+      const { token } = await service.accept({
+        ageConfirmed: true,
+        legalVersion: productConfig.legalVersion
+      });
+      return token;
+    }
+
+    it("renames the session, normalizes the name, and starts the cooldown", async () => {
+      const token = await newSession();
+
+      const summary = await service.changeDisplayName(token, "  Cool   Wanderer  ");
+      expect(summary.identity.displayName).toBe("Cool Wanderer");
+      expect(summary.displayNameChange.allowed).toBe(false);
+      expect(summary.displayNameChange.nextAllowedAt).toEqual(expect.any(String));
+
+      // Persisted for the session.
+      const resolved = await service.getSession(token);
+      expect(resolved!.identity.displayName).toBe("Cool Wanderer");
+    });
+
+    it("leaves the avatar untouched when renaming", async () => {
+      const token = await newSession();
+      const before = (await service.getSession(token))!.identity.avatar;
+      const after = (await service.changeDisplayName(token, "Quiet Harbor")).identity.avatar;
+      expect(after).toEqual(before);
+    });
+
+    it("rejects an unsafe name without consuming the cooldown", async () => {
+      const token = await newSession();
+      await expect(service.changeDisplayName(token, "instagram_me")).rejects.toBeInstanceOf(
+        BadRequestException
+      );
+      // Still allowed to try again after a rejected (unsaved) attempt.
+      const status = (await service.getSession(token))!.displayNameChange;
+      expect(status.allowed).toBe(true);
+    });
+
+    it("enforces once-per-day: a second change within the window is rejected", async () => {
+      const token = await newSession();
+      await service.changeDisplayName(token, "Mighty Beacon");
+      await expect(service.changeDisplayName(token, "Sunny Meadow")).rejects.toBeInstanceOf(
+        ConflictException
+      );
+    });
+
+    it("allows another change once the cooldown window has elapsed", async () => {
+      const token = await newSession();
+      const sessionId = service.verify(token)!;
+      await service.changeDisplayName(token, "Frosty Pebble");
+
+      // Simulate the last change happening just over a day ago.
+      const record = (await store.get(sessionId))!;
+      const longAgo = new Date(Date.now() - (productConfig.displayNameChangeCooldownHours + 1) * 3600_000);
+      record.displayNameUpdatedAt = longAgo.toISOString();
+      await store.save(record);
+
+      const summary = await service.changeDisplayName(token, "Stellar Canyon");
+      expect(summary.identity.displayName).toBe("Stellar Canyon");
+    });
+
+    it("requires an accepted session", async () => {
+      await expect(service.changeDisplayName(undefined, "Brave Otter")).rejects.toThrow();
+    });
   });
 
   describe("safety guidelines gate", () => {

@@ -64,6 +64,43 @@ describe("Session gate (e2e)", () => {
     expect(res.body).toMatchObject({ accepted: true, legalVersion: productConfig.legalVersion });
   });
 
+  it("changes the display name once, then enforces the daily cooldown (stories 16-18)", async () => {
+    const accepted = await acceptCookie().expect(200);
+    const cookie = accepted.headers["set-cookie"];
+
+    // A safe, moderated name is accepted and surfaced.
+    const renamed = await request(app.getHttpServer())
+      .post("/session/username")
+      .set("Cookie", cookie)
+      .send({ displayName: "Curious Lantern" })
+      .expect(200);
+    expect(renamed.body.identity.displayName).toBe("Curious Lantern");
+    expect(renamed.body.displayNameChange.allowed).toBe(false);
+
+    // A second change within the day is blocked by the cooldown (409).
+    await request(app.getHttpServer())
+      .post("/session/username")
+      .set("Cookie", cookie)
+      .send({ displayName: "Sunny Meadow" })
+      .expect(409);
+  });
+
+  it("rejects an unsafe display name (400) and requires a session (401)", async () => {
+    const accepted = await acceptCookie().expect(200);
+    const cookie = accepted.headers["set-cookie"];
+
+    await request(app.getHttpServer())
+      .post("/session/username")
+      .set("Cookie", cookie)
+      .send({ displayName: "follow my instagram" })
+      .expect(400);
+
+    await request(app.getHttpServer())
+      .post("/session/username")
+      .send({ displayName: "Brave Otter" })
+      .expect(401);
+  });
+
   it("guards queue eligibility until both legal and safety gates are accepted", async () => {
     // No session at all -> 401 from the legal guard.
     await request(app.getHttpServer()).get("/session/queue-eligibility").expect(401);
