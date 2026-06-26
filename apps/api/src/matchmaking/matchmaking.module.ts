@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { AuthModule } from "../auth/auth.module";
 import { FeatureFlagsModule } from "../feature-flags/feature-flags.module";
 import { InMemoryMatchmakingQueue } from "./in-memory-matchmaking.queue";
 import { MatchmakingController } from "./matchmaking.controller";
@@ -25,13 +26,15 @@ function createMatchmakingQueue(): MatchmakingQueue {
 
 /**
  * The shared global matching pool (issue #17). Imports {@link FeatureFlagsModule}
- * so queue entry can be gated on the `queue_entry` kill switch (story 84). The
- * gateway shares the Socket.IO server stood up by the realtime slice; no extra
- * wiring is needed because Nest attaches every gateway on the same port to one
- * server.
+ * so queue entry and gender filtering can be gated on the `queue_entry` /
+ * `gender_filters` kill switches (story 84), and {@link AuthModule} so the
+ * gateway can read a logged-in joiner's declared gender + filter for gender
+ * matching (stories 30-32, issue #19). The gateway shares the Socket.IO server
+ * stood up by the realtime slice; no extra wiring is needed because Nest
+ * attaches every gateway on the same port to one server.
  */
 @Module({
-  imports: [FeatureFlagsModule],
+  imports: [FeatureFlagsModule, AuthModule],
   controllers: [MatchmakingController],
   providers: [
     MatchmakingService,

@@ -7,11 +7,14 @@ import {
 } from "@nestjs/websockets";
 import type { Server, Socket } from "socket.io";
 import { resolveLanguage } from "@fahhhchat/config";
+import { AuthService } from "../auth/auth.service";
 import { webOrigins } from "../cors-origins";
 import type { AuthenticatedSocketData } from "../realtime/realtime.gateway";
+import type { RealtimeIdentity } from "../realtime/realtime.types";
 import { MatchmakingService } from "./matchmaking.service";
 import {
   MATCHMAKING_EVENTS,
+  type JoinPreferences,
   type Match,
   type MatchFoundPayload,
 } from "./matchmaking.types";
@@ -37,7 +40,10 @@ export class MatchmakingGateway implements OnGatewayDisconnect {
   @WebSocketServer()
   private readonly server!: Server;
 
-  constructor(private readonly matchmaking: MatchmakingService) {}
+  constructor(
+    private readonly matchmaking: MatchmakingService,
+    private readonly auth: AuthService
+  ) {}
 
   @SubscribeMessage(MATCHMAKING_EVENTS.join)
   async handleJoin(
@@ -57,7 +63,8 @@ export class MatchmakingGateway implements OnGatewayDisconnect {
     // a supported code here so an unsupported or missing value just falls back
     // to the default rather than skewing matching (stories 26-28, 36).
     const language = resolveLanguage(payload?.language);
-    const result = await this.matchmaking.join(identity, client.id, language);
+    const prefs = await this.resolvePreferences(identity, language);
+    const result = await this.matchmaking.join(identity, client.id, prefs);
     if (result.status === "unavailable") {
       client.emit(MATCHMAKING_EVENTS.error, {
         message: "Matching is temporarily unavailable. Please try again later.",
@@ -98,6 +105,25 @@ export class MatchmakingGateway implements OnGatewayDisconnect {
     this.server.to(match.initiator.socketId).emit(MATCHMAKING_EVENTS.matchFound, toInitiator);
     this.server.to(match.responder.socketId).emit(MATCHMAKING_EVENTS.matchFound, toResponder);
     this.logger.debug(`Created match ${match.matchId}`);
+  }
+
+  /**
+   * Resolve the joiner's soft matching preferences. Language is client-supplied
+   * (it only steers who they meet). Gender filtering is *logged-in only* (story
+   * 30) and read from the stored account, never the client, so a user can't spoof
+   * the declared gender others filter on; guests carry no gender and no filter.
+   */
+  private async resolvePreferences(
+    identity: RealtimeIdentity,
+    language: ReturnType<typeof resolveLanguage>
+  ): Promise<JoinPreferences> {
+    if (identity.kind !== "user") {
+      return { language };
+    }
+    const { gender, genderFilter } = await this.auth.getMatchPreferences(
+      identity.id
+    );
+    return { language, gender, genderFilter };
   }
 
   private identityOf(client: Socket) {
