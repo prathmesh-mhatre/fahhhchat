@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { FeatureFlagsModule } from "../feature-flags/feature-flags.module";
 import { AuthController } from "./auth.controller";
 import { AuthGuard } from "./auth.guard";
 import { AuthService } from "./auth.service";
@@ -33,6 +34,7 @@ function createUserStore(): UserStore {
 }
 
 @Module({
+  imports: [FeatureFlagsModule],
   controllers: [AuthController],
   providers: [
     AuthService,

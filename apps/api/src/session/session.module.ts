@@ -1,4 +1,5 @@
 import { Module } from "@nestjs/common";
+import { FeatureFlagsModule } from "../feature-flags/feature-flags.module";
 import { GuestSessionService } from "./guest-session.service";
 import { GuestGuard } from "./guest.guard";
 import { SafetyGuidelinesGuard } from "./safety-guidelines.guard";
@@ -23,6 +24,7 @@ function createSessionStore(): SessionStore {
 }
 
 @Module({
+  imports: [FeatureFlagsModule],
   controllers: [SessionController],
   providers: [
     GuestSessionService,

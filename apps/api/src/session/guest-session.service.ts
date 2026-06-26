@@ -5,6 +5,7 @@ import { generateDisplayIdentity } from "../identity/display-identity";
 import { avatarChangeStatus } from "../identity/avatar-change";
 import { displayNameChangeStatus } from "../identity/display-name-change";
 import { moderateDisplayName } from "../identity/username-moderation";
+import { FeatureFlagsService } from "../feature-flags/feature-flags.service";
 import { SESSION_STORE } from "./session.types";
 import type {
   GuestSessionRecord,
@@ -34,7 +35,10 @@ export interface AcceptLegalResult {
 export class GuestSessionService {
   private readonly secret: string;
 
-  constructor(@Inject(SESSION_STORE) private readonly store: SessionStore) {
+  constructor(
+    @Inject(SESSION_STORE) private readonly store: SessionStore,
+    private readonly flags: FeatureFlagsService
+  ) {
     const secret = process.env.AUTH_SECRET;
     if (!secret) {
       throw new Error("AUTH_SECRET must be set to sign guest session cookies");
@@ -43,6 +47,12 @@ export class GuestSessionService {
   }
 
   async accept(input: AcceptLegalInput): Promise<AcceptLegalResult> {
+    // Guest access is a launch kill switch (story 84): when an operator turns it
+    // off, no new guest sessions may be created. Logged-in access is unaffected.
+    await this.flags.assertEnabled(
+      "guest_access",
+      "Guest access is temporarily unavailable. Please sign in with Google to continue."
+    );
     if (input.ageConfirmed !== true) {
       throw new BadRequestException("You must confirm that you are 18 or older.");
     }

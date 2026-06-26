@@ -1,9 +1,25 @@
 import { createHmac } from "node:crypto";
-import { BadRequestException, ConflictException, UnauthorizedException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  ServiceUnavailableException,
+  UnauthorizedException
+} from "@nestjs/common";
 import { productConfig } from "@fahhhchat/config";
 import { AuthService } from "./auth.service";
 import { InMemoryUserStore } from "./in-memory-user.store";
 import { DevMockTokenVerifier, encodeMockGoogleToken } from "./google-token-verifier";
+import { FeatureFlagsService } from "../feature-flags/feature-flags.service";
+import { InMemoryFeatureFlagStore } from "../feature-flags/in-memory-feature-flag.store";
+import { InMemoryFeatureFlagAuditLog } from "../feature-flags/in-memory-feature-flag-audit.log";
+
+/** A feature-flags service seeded with the given disabled kill switches. */
+function flagsWith(disabled: ("guest_access" | "queue_entry" | "camera_media" | "gender_filters")[] = []): FeatureFlagsService {
+  return new FeatureFlagsService(
+    new InMemoryFeatureFlagStore(disabled),
+    new InMemoryFeatureFlagAuditLog()
+  );
+}
 
 /** Mint a valid app token for a user id, mirroring AuthService's signing scheme. */
 function mintTokenFor(secret: string, userId: string): string {
@@ -21,7 +37,7 @@ describe("AuthService", () => {
 
   beforeEach(() => {
     store = new InMemoryUserStore();
-    service = new AuthService(store, new DevMockTokenVerifier());
+    service = new AuthService(store, new DevMockTokenVerifier(), flagsWith());
   });
 
   const aliceToken = encodeMockGoogleToken({ sub: "google-alice", email: "alice@example.com" });
@@ -341,6 +357,23 @@ describe("AuthService", () => {
       ).rejects.toBeInstanceOf(BadRequestException);
       // The rejected attempt did not complete onboarding either.
       expect((await service.getUser(token))!.onboarding.required).toBe(true);
+    });
+
+    it("blocks a narrowing filter when the gender_filters kill switch is off (story 84)", async () => {
+      const killed = new AuthService(
+        store,
+        new DevMockTokenVerifier(),
+        flagsWith(["gender_filters"])
+      );
+      const { token } = await killed.loginWithGoogle(aliceToken);
+      await expect(
+        killed.setPreferences(token, "en", "male", undefined, "female")
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+      // Clearing the filter ("both") is still allowed even while disabled, so a
+      // user can opt back out of a filter that matching is ignoring.
+      const summary = await killed.setPreferences(token, "en", "male", undefined, "both");
+      expect(summary.preferences.genderFilter).toBe("both");
     });
   });
 
