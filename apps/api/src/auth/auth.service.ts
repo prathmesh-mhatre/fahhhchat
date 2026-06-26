@@ -1,7 +1,9 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { BadRequestException, ConflictException, Inject, Injectable, UnauthorizedException } from "@nestjs/common";
 import {
+  defaultGenderFilter,
   defaultLanguage,
+  isGenderFilter,
   isLanguageCode,
   isUserGender,
   productConfig,
@@ -179,16 +181,19 @@ export class AuthService {
 
   /**
    * Saves the account's matching language and gender, and optionally a separate
-   * UI language (stories 27-29). Used both for the initial lightweight
-   * onboarding step and for later preference edits — once matching language and
-   * gender are set, {@link OnboardingStatus.required} flips to false. UI and
-   * matching language are stored as distinct fields so they can diverge later.
+   * UI language and gender filter (stories 27-31). Used both for the initial
+   * lightweight onboarding step and for later preference edits — once matching
+   * language and gender are set, {@link OnboardingStatus.required} flips to
+   * false. UI and matching language are stored as distinct fields so they can
+   * diverge later; the gender filter is captured here but only consumed by
+   * matching in a later slice.
    */
   async setPreferences(
     token: string | undefined,
     rawMatchingLanguage: unknown,
     rawGender: unknown,
-    rawUiLanguage: unknown
+    rawUiLanguage: unknown,
+    rawGenderFilter?: unknown
   ): Promise<UserSummary> {
     const record = await this.requireRecord(token);
 
@@ -204,11 +209,19 @@ export class AuthService {
     if (rawUiLanguage !== undefined && !isLanguageCode(rawUiLanguage)) {
       throw new BadRequestException("Choose a UI language from the supported list.");
     }
+    // Gender filter is optional: it keeps its current value (or the "both"
+    // default) when omitted, but if provided it must be a valid choice.
+    if (rawGenderFilter !== undefined && !isGenderFilter(rawGenderFilter)) {
+      throw new BadRequestException("Choose a gender filter of Male, Female, or Both.");
+    }
 
     record.matchingLanguage = rawMatchingLanguage;
     record.gender = rawGender;
     record.uiLanguage =
       rawUiLanguage !== undefined ? rawUiLanguage : (record.uiLanguage ?? rawMatchingLanguage);
+    if (rawGenderFilter !== undefined) {
+      record.genderFilter = rawGenderFilter;
+    }
     record.preferencesUpdatedAt = new Date().toISOString();
     await this.store.save(record);
     return this.toSummary(record);
@@ -283,7 +296,8 @@ export class AuthService {
     return {
       uiLanguage: record.uiLanguage ?? defaultLanguage,
       matchingLanguage: record.matchingLanguage ?? defaultLanguage,
-      gender: record.gender ?? null
+      gender: record.gender ?? null,
+      genderFilter: record.genderFilter ?? defaultGenderFilter
     };
   }
 

@@ -40,6 +40,7 @@ interface SavePreferencesBody {
   matchingLanguage?: unknown;
   gender?: unknown;
   uiLanguage?: unknown;
+  genderFilter?: unknown;
 }
 
 @Controller("auth")
@@ -114,15 +115,21 @@ export class AuthController {
 
   /**
    * Saves the account's matching language and gender (and optional separate UI
-   * language) for lightweight onboarding or a later preference edit (stories
-   * 27-29). The server validates against the supported sets.
+   * language and gender filter) for lightweight onboarding or a later preference
+   * edit (stories 27-31). The server validates against the supported sets.
    */
   @Post("preferences")
   @HttpCode(200)
   @UseGuards(AuthGuard)
   async savePreferences(@Body() body: SavePreferencesBody, @Req() req: Request) {
     const token = req.cookies?.[USER_COOKIE_NAME];
-    return this.auth.setPreferences(token, body?.matchingLanguage, body?.gender, body?.uiLanguage);
+    return this.auth.setPreferences(
+      token,
+      body?.matchingLanguage,
+      body?.gender,
+      body?.uiLanguage,
+      body?.genderFilter
+    );
   }
 
   /** Clears the app session cookie (logout). */

@@ -2,6 +2,7 @@ import type {
   AvatarChangeStatus,
   DisplayIdentity,
   DisplayNameChangeStatus,
+  GenderFilter,
   LanguageCode,
   OnboardingStatus,
   UserGender,
@@ -128,6 +129,7 @@ export async function saveUserPreferences(input: {
   matchingLanguage: LanguageCode;
   gender: UserGender;
   uiLanguage?: LanguageCode;
+  genderFilter?: GenderFilter;
 }): Promise<AppUser> {
   const res = await fetch(`${API_URL}/auth/preferences`, {
     method: "POST",

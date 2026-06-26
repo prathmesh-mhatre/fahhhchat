@@ -51,6 +51,12 @@ export interface UserRecord {
   matchingLanguage?: LanguageCode;
   /** Self-declared gender for gender filters (story 29); undefined until set. */
   gender?: UserGender;
+  /**
+   * Gender filter guiding matching (story 30); undefined until the user narrows
+   * it, defaulting to "both" (no filtering) in the summary. Distinct from the
+   * self-declared {@link gender}.
+   */
+  genderFilter?: GenderFilter;
   /** When the user last saved language/gender preferences. */
   preferencesUpdatedAt?: string;
   /** Persisted legal/age acceptance for the account (story 22). */
@@ -68,6 +74,7 @@ import type {
   AvatarChangeStatus,
   DisplayIdentity,
   DisplayNameChangeStatus,
+  GenderFilter,
   LanguageCode,
   OnboardingStatus,
   UserGender,

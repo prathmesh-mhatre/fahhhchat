@@ -249,7 +249,9 @@ describe("AuthService", () => {
       expect(summary.preferences).toEqual({
         uiLanguage: "en",
         matchingLanguage: "en",
-        gender: null
+        gender: null,
+        // Gender filter defaults to "both" (no filtering) before onboarding.
+        genderFilter: "both"
       });
     });
 
@@ -281,7 +283,8 @@ describe("AuthService", () => {
       expect(relogin.summary.preferences).toEqual({
         uiLanguage: "de",
         matchingLanguage: "fr",
-        gender: "prefer_not_to_say"
+        gender: "prefer_not_to_say",
+        genderFilter: "both"
       });
     });
 
@@ -304,6 +307,40 @@ describe("AuthService", () => {
       await expect(service.setPreferences(undefined, "en", "male", undefined)).rejects.toBeInstanceOf(
         UnauthorizedException
       );
+    });
+  });
+
+  describe("gender filter preference (stories 30-31)", () => {
+    it("defaults to 'both' (no filtering) until the user narrows it", async () => {
+      const { token } = await service.loginWithGoogle(aliceToken);
+      const summary = await service.setPreferences(token, "en", "male", undefined);
+      expect(summary.preferences.genderFilter).toBe("both");
+    });
+
+    it("saves a chosen filter and persists it across logins (story 22)", async () => {
+      const { token } = await service.loginWithGoogle(aliceToken);
+      const summary = await service.setPreferences(token, "en", "male", undefined, "female");
+      expect(summary.preferences.genderFilter).toBe("female");
+
+      const relogin = await service.loginWithGoogle(aliceToken);
+      expect(relogin.summary.preferences.genderFilter).toBe("female");
+    });
+
+    it("leaves an existing filter untouched when omitted from a later edit", async () => {
+      const { token } = await service.loginWithGoogle(aliceToken);
+      await service.setPreferences(token, "en", "male", undefined, "male");
+      // A later edit that only changes language must not reset the filter.
+      const summary = await service.setPreferences(token, "es", "male", undefined);
+      expect(summary.preferences.genderFilter).toBe("male");
+    });
+
+    it("rejects an unsupported gender filter without saving other changes", async () => {
+      const { token } = await service.loginWithGoogle(aliceToken);
+      await expect(
+        service.setPreferences(token, "en", "male", undefined, "everyone")
+      ).rejects.toBeInstanceOf(BadRequestException);
+      // The rejected attempt did not complete onboarding either.
+      expect((await service.getUser(token))!.onboarding.required).toBe(true);
     });
   });
 

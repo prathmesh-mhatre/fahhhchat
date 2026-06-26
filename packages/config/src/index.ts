@@ -134,6 +134,37 @@ export function isUserGender(value: unknown): value is UserGender {
 }
 
 /**
+ * Gender *filter* a logged-in user picks to guide matching (story 30) — distinct
+ * from their own self-declared {@link UserGender}. "Both" means no filtering.
+ * The PRD is explicit that this is a *strong preference, not a promise* (story
+ * 31): matching first tries declared logged-in users of the chosen gender, then
+ * falls back to guests after a visible wait window (stories 32-33), so a filter
+ * can still surface guests whose gender is unknown (story 35). Logged-in only.
+ * The actual matching behaviour lands in later slices; this set is the shared
+ * API↔web contract for capturing and validating the preference.
+ */
+export const genderFilterOptions = [
+  { value: "male", label: "Male" },
+  { value: "female", label: "Female" },
+  { value: "both", label: "Both" }
+] as const;
+
+export type GenderFilter = (typeof genderFilterOptions)[number]["value"];
+
+/**
+ * Default filter: "Both" applies no gender constraint, the right default since a
+ * filter is an opt-in narrowing and should never silently shrink a new user's
+ * match pool. Onboarding does not block on it (it is not part of
+ * {@link OnboardingStatus}); the user adjusts it whenever they like.
+ */
+export const defaultGenderFilter: GenderFilter = "both";
+
+/** Type-guard for a valid gender filter selection. */
+export function isGenderFilter(value: unknown): value is GenderFilter {
+  return typeof value === "string" && genderFilterOptions.some((option) => option.value === value);
+}
+
+/**
  * A logged-in user's matching/UI preferences. UI language and matching language
  * are kept as *separate* fields (story 27) so interface localization and match
  * preference can evolve independently; both are seeded from the browser language
@@ -147,6 +178,12 @@ export interface UserPreferences {
   matchingLanguage: LanguageCode;
   /** Self-declared gender, or null until set (story 29). */
   gender: UserGender | null;
+  /**
+   * Gender filter guiding matching (story 30); defaults to
+   * {@link defaultGenderFilter} ("both") until the user narrows it. A strong
+   * preference, not a guarantee (story 31).
+   */
+  genderFilter: GenderFilter;
 }
 
 /**

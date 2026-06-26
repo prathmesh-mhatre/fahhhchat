@@ -1,5 +1,7 @@
 import {
+  defaultGenderFilter,
   defaultLanguage,
+  isGenderFilter,
   isLanguageCode,
   isUserGender,
   resolveLanguage
@@ -40,6 +42,22 @@ describe("language + gender preference helpers (stories 26-29)", () => {
       expect(isUserGender("prefer_not_to_say")).toBe(true);
       expect(isUserGender("other")).toBe(false);
       expect(isUserGender("")).toBe(false);
+    });
+  });
+
+  describe("isGenderFilter (stories 30-31)", () => {
+    it("accepts Male, Female, or Both only", () => {
+      expect(isGenderFilter("male")).toBe(true);
+      expect(isGenderFilter("female")).toBe(true);
+      expect(isGenderFilter("both")).toBe(true);
+      expect(isGenderFilter("prefer_not_to_say")).toBe(false);
+      expect(isGenderFilter("everyone")).toBe(false);
+      expect(isGenderFilter(undefined)).toBe(false);
+    });
+
+    it('defaults to "both" so a filter never silently shrinks the match pool', () => {
+      expect(defaultGenderFilter).toBe("both");
+      expect(isGenderFilter(defaultGenderFilter)).toBe(true);
     });
   });
 });
