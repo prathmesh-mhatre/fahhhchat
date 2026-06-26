@@ -3,9 +3,11 @@
 import { useMemo, useState } from "react";
 import { Button } from "@fahhhchat/ui";
 import {
+  genderFilterOptions,
   genderOptions,
   matchingLanguages,
   resolveLanguage,
+  type GenderFilter,
   type LanguageCode,
   type UserGender,
   type UserPreferences
@@ -16,7 +18,9 @@ import {
  * 27-29). Matching language and UI language are presented as *separate*
  * preferences, both seeded from the browser language so the common case is one
  * confirm. Gender offers Male / Female / Prefer not to say without forcing more
- * disclosure. The server validates and is authoritative; errors surface here.
+ * disclosure. A gender *filter* (Male / Female / Both) guides matching as a
+ * strong preference, not a guarantee (stories 30-31, 34-35). The server
+ * validates and is authoritative; errors surface here.
  */
 export function OnboardingForm({
   preferences,
@@ -29,6 +33,7 @@ export function OnboardingForm({
     matchingLanguage: LanguageCode;
     gender: UserGender;
     uiLanguage: LanguageCode;
+    genderFilter: GenderFilter;
   }) => Promise<void>;
 }) {
   // Seed the languages from the browser the first time round (stories 26-28).
@@ -46,6 +51,7 @@ export function OnboardingForm({
     notYetOnboarded ? browserDefault : preferences.uiLanguage
   );
   const [gender, setGender] = useState<UserGender | "">(preferences.gender ?? "");
+  const [genderFilter, setGenderFilter] = useState<GenderFilter>(preferences.genderFilter);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,7 +63,7 @@ export function OnboardingForm({
     setSubmitting(true);
     setError(null);
     try {
-      await onSave({ matchingLanguage, gender, uiLanguage });
+      await onSave({ matchingLanguage, gender, uiLanguage, genderFilter });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save preferences. Please try again.");
     } finally {
@@ -107,6 +113,30 @@ export function OnboardingForm({
           ))}
         </div>
       </fieldset>
+
+      <div className="onboarding-field">
+        <label className="onboarding-label" htmlFor="gender-filter">
+          Who would you like to match with?
+        </label>
+        <select
+          id="gender-filter"
+          className="onboarding-select"
+          value={genderFilter}
+          onChange={(e) => setGenderFilter(e.target.value as GenderFilter)}
+          disabled={submitting}
+        >
+          {genderFilterOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <p className="onboarding-hint">
+          Filters guide matching when people are available — they&apos;re a strong preference, not a
+          guarantee. When few people match your filter, you may still be matched with guests, whose
+          gender we don&apos;t collect.
+        </p>
+      </div>
 
       <div className="onboarding-field">
         <label className="onboarding-label" htmlFor="ui-language">

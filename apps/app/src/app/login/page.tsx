@@ -3,7 +3,13 @@
 import { useEffect, useState } from "react";
 import { signIn, signOut, useSession } from "next-auth/react";
 import { Button, ButtonLink, Eyebrow, Surface } from "@fahhhchat/ui";
-import { genderOptions, matchingLanguages, productConfig, type UserPreferences } from "@fahhhchat/config";
+import {
+  genderFilterOptions,
+  genderOptions,
+  matchingLanguages,
+  productConfig,
+  type UserPreferences
+} from "@fahhhchat/config";
 import {
   acceptUserLegal,
   changeUserAvatar,
@@ -29,6 +35,11 @@ function languageLabel(code: string): string {
 /** Human label for a stored gender, or a friendly placeholder when unset. */
 function genderLabel(prefs: UserPreferences): string {
   return genderOptions.find((option) => option.value === prefs.gender)?.label ?? "Not set";
+}
+
+/** Human label for the stored gender filter, falling back to the raw value. */
+function genderFilterLabel(prefs: UserPreferences): string {
+  return genderFilterOptions.find((option) => option.value === prefs.genderFilter)?.label ?? prefs.genderFilter;
 }
 
 type ViewState = "loading" | "signed-out" | "establishing" | "legal" | "onboarding" | "ready";
@@ -279,6 +290,10 @@ export default function LoginPage() {
                       <div>
                         <dt>Gender</dt>
                         <dd>{genderLabel(user.preferences)}</dd>
+                      </div>
+                      <div>
+                        <dt>Match with</dt>
+                        <dd>{genderFilterLabel(user.preferences)}</dd>
                       </div>
                       <div>
                         <dt>Interface language</dt>
