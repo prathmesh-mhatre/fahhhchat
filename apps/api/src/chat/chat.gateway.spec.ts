@@ -6,7 +6,7 @@ import type {
 import type { RealtimeIdentity } from "../realtime/realtime.types";
 import { ChatGateway } from "./chat.gateway";
 import { ChatService } from "./chat.service";
-import { CHAT_EVENTS } from "./chat.types";
+import { CHAT_EVENTS, type DisplayNameResolver } from "./chat.types";
 import { InMemoryChatStore } from "./in-memory-chat.store";
 
 interface Emit {
@@ -61,8 +61,15 @@ function participant(
   };
 }
 
+/** Resolves each participant to a fixed generated name for typing assertions. */
+const resolver: DisplayNameResolver = {
+  async resolve(identity) {
+    return identity.kind === "user" ? "Mellow Otter" : "Cosmic Sparrow";
+  },
+};
+
 function buildGateway() {
-  const chat = new ChatService(new InMemoryChatStore());
+  const chat = new ChatService(new InMemoryChatStore(), resolver);
   const gateway = new ChatGateway(chat);
   const { server, delivered } = fakeServer();
   (gateway as unknown as { server: Server }).server = server;
@@ -198,5 +205,77 @@ describe("ChatGateway", () => {
     await gateway.handleDisconnect(stranger.socket);
 
     expect(delivered).toHaveLength(0);
+  });
+
+  describe("typing indicators (story 40)", () => {
+    it("relays a typing toggle to the partner with the typist's generated name", async () => {
+      const { gateway, chat, delivered } = buildGateway();
+      await seedMatch(chat);
+      const typist = fakeSocket(INITIATOR.socketId, INITIATOR.identity);
+
+      await gateway.handleTyping(typist.socket, { isTyping: true });
+
+      const typing = delivered.find((d) => d.event === CHAT_EVENTS.typing);
+      expect(typing?.to).toBe(RESPONDER.socketId);
+      expect(typing?.payload).toEqual({
+        matchId: "m1",
+        from: "initiator",
+        displayName: "Mellow Otter",
+        isTyping: true,
+      });
+    });
+
+    it("never echoes the typing indicator back to the typist", async () => {
+      const { gateway, chat, delivered } = buildGateway();
+      await seedMatch(chat);
+      const typist = fakeSocket(INITIATOR.socketId, INITIATOR.identity);
+
+      await gateway.handleTyping(typist.socket, { isTyping: true });
+
+      const echoed = delivered.filter(
+        (d) => d.event === CHAT_EVENTS.typing && d.to === INITIATOR.socketId,
+      );
+      expect(echoed).toHaveLength(0);
+      // The typist is told nothing in return — typing is one-way presence.
+      expect(typist.emitted).toHaveLength(0);
+    });
+
+    it("ignores typing from an unauthenticated socket", async () => {
+      const { gateway, delivered } = buildGateway();
+      const rogue = fakeSocket("rogue"); // no identity
+
+      await gateway.handleTyping(rogue.socket, { isTyping: true });
+
+      expect(delivered).toHaveLength(0);
+    });
+
+    it("ignores typing when the sender is in no active match", async () => {
+      const { gateway, delivered } = buildGateway();
+      const lonely = fakeSocket("s-lonely", guest("g-lonely"));
+
+      await gateway.handleTyping(lonely.socket, { isTyping: true });
+
+      expect(delivered).toHaveLength(0);
+    });
+  });
+
+  describe("no read receipts (story 41)", () => {
+    it("exposes no read/seen/receipt event in the chat contract", () => {
+      const names = Object.values(CHAT_EVENTS).join(" ").toLowerCase();
+      expect(names).not.toMatch(/read|seen|receipt/);
+    });
+
+    it("never sends a read confirmation when a message is delivered", async () => {
+      const { gateway, chat, delivered } = buildGateway();
+      await seedMatch(chat);
+      const sender = fakeSocket(INITIATOR.socketId, INITIATOR.identity);
+
+      await gateway.handleSend(sender.socket, { text: "hello" });
+
+      // The sender's only feedback is the delivery ack — never a "read" event,
+      // and the recipient is never asked to confirm a read either.
+      expect(sender.emitted.map((e) => e.event)).toEqual([CHAT_EVENTS.ack]);
+      expect(delivered.map((d) => d.event)).toEqual([CHAT_EVENTS.message]);
+    });
   });
 });

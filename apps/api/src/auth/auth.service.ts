@@ -112,6 +112,18 @@ export class AuthService {
   }
 
   /**
+   * The account's generated display name by internal user id, or null when the
+   * account is unknown or has no identity yet. Read off the stored account (never
+   * client-asserted) so the chat layer can attach a *server-authoritative* name
+   * to a logged-in user's typing indicator (story 40) — a user can never spoof
+   * the name a stranger sees.
+   */
+  async getDisplayName(userId: string): Promise<string | null> {
+    const record = await this.store.get(userId);
+    return record?.identity?.displayName ?? null;
+  }
+
+  /**
    * Resolve the internal user id for a valid app token, but only when the
    * account still exists, or null otherwise. Used by the realtime slice to scope
    * a Socket.IO handshake token to a real logged-in account.

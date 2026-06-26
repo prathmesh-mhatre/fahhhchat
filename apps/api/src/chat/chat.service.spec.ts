@@ -5,10 +5,27 @@ import type {
 } from "../matchmaking/matchmaking.types";
 import type { RealtimeIdentity } from "../realtime/realtime.types";
 import { ChatService } from "./chat.service";
+import type { DisplayNameResolver } from "./chat.types";
 import { InMemoryChatStore } from "./in-memory-chat.store";
 
 const guest = (id: string): RealtimeIdentity => ({ kind: "guest", id });
 const user = (id: string): RealtimeIdentity => ({ kind: "user", id });
+
+/**
+ * Stub resolver mapping a participant's identity to a fixed generated name, so
+ * typing assertions can check the *exact* name the chat layer froze on the
+ * match. Defaults to `<kind>:<id>` for any identity not named explicitly.
+ */
+function stubResolver(
+  names: Partial<Record<string, string>> = {},
+): DisplayNameResolver {
+  return {
+    async resolve(identity) {
+      const key = `${identity.kind}:${identity.id}`;
+      return names[key] ?? key;
+    },
+  };
+}
 
 /** Minimal queued participant; only identity + socket matter to chat routing. */
 function participant(
@@ -39,8 +56,8 @@ function match(
   };
 }
 
-function buildService() {
-  const service = new ChatService(new InMemoryChatStore());
+function buildService(resolver: DisplayNameResolver = stubResolver()) {
+  const service = new ChatService(new InMemoryChatStore(), resolver);
   return { service };
 }
 
@@ -200,9 +217,73 @@ describe("ChatService", () => {
     });
   });
 
+  describe("typing (story 40)", () => {
+    it("relays a typing toggle to the partner with the sender's frozen name", async () => {
+      const resolver = stubResolver({ "user:u1": "Mellow Otter" });
+      const { service } = buildService(resolver);
+      await service.registerMatch(match(initiator, responder));
+
+      const result = await service.typing(initiator.identity, true);
+
+      expect(result).toEqual({
+        status: "relay",
+        matchId: "m1",
+        // Routed to the *partner's* socket, never echoed to the typist.
+        recipientSocketId: responder.socketId,
+        from: "initiator",
+        displayName: "Mellow Otter",
+        isTyping: true,
+      });
+    });
+
+    it("carries the stop toggle through the same relay", async () => {
+      const { service } = buildService();
+      await service.registerMatch(match(initiator, responder));
+
+      const result = await service.typing(responder.identity, false);
+
+      expect(result.status).toBe("relay");
+      if (result.status !== "relay") return;
+      expect(result.recipientSocketId).toBe(initiator.socketId);
+      expect(result.from).toBe("responder");
+      expect(result.isTyping).toBe(false);
+    });
+
+    it("drops a typing toggle when the sender is in no active match (story 43)", async () => {
+      const { service } = buildService();
+
+      const result = await service.typing(user("nobody"), true);
+
+      expect(result).toEqual({ status: "no_active_match" });
+    });
+
+    it("drops a typing toggle once the match has ended", async () => {
+      const { service } = buildService();
+      const created = match(initiator, responder);
+      await service.registerMatch(created);
+      await service.endMatch(created.matchId, "partner_disconnected");
+
+      const result = await service.typing(initiator.identity, true);
+
+      expect(result).toEqual({ status: "no_active_match" });
+    });
+
+    it("falls back to a neutral name when the sender's name can't be resolved", async () => {
+      const resolver: DisplayNameResolver = { async resolve() { return null; } };
+      const { service } = buildService(resolver);
+      await service.registerMatch(match(initiator, responder));
+
+      const result = await service.typing(initiator.identity, true);
+
+      expect(result.status).toBe("relay");
+      if (result.status !== "relay") return;
+      expect(result.displayName).toBe("Stranger");
+    });
+  });
+
   it("keeps the buffer bounded to the rolling window", async () => {
     // A tiny buffer makes the cap observable without sending hundreds of messages.
-    const service = new ChatService(new InMemoryChatStore(3));
+    const service = new ChatService(new InMemoryChatStore(3), stubResolver());
     const created = match(initiator, responder);
     await service.registerMatch(created);
 

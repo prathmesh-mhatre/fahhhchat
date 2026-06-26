@@ -5,14 +5,18 @@ import type { Match } from "../matchmaking/matchmaking.types";
 import type { RealtimeIdentity } from "../realtime/realtime.types";
 import {
   CHAT_STORE,
+  DISPLAY_NAME_RESOLVER,
+  FALLBACK_DISPLAY_NAME,
   chatIdentityKey,
   type ActiveMatch,
   type ChatMessage,
   type ChatStore,
+  type DisplayNameResolver,
   type EndedMatch,
   type MatchEndReason,
   type SendMessagePayload,
   type SendResult,
+  type TypingResult,
 } from "./chat.types";
 
 /**
@@ -38,7 +42,11 @@ import {
  */
 @Injectable()
 export class ChatService {
-  constructor(@Inject(CHAT_STORE) private readonly store: ChatStore) {}
+  constructor(
+    @Inject(CHAT_STORE) private readonly store: ChatStore,
+    @Inject(DISPLAY_NAME_RESOLVER)
+    private readonly displayNames: DisplayNameResolver,
+  ) {}
 
   /**
    * Register a freshly created pairing so its messages can be routed. Called by
@@ -48,6 +56,13 @@ export class ChatService {
    * side — and never retains anything else about the users.
    */
   async registerMatch(match: Match): Promise<void> {
+    // Resolve each side's generated display name once, here, and freeze it on the
+    // match. Typing indicators (story 40) read it back without another lookup,
+    // and a mid-match rename can't change the name the stranger already sees.
+    const [initiatorName, responderName] = await Promise.all([
+      this.resolveDisplayName(match.initiator.identity),
+      this.resolveDisplayName(match.responder.identity),
+    ]);
     const active: ActiveMatch = {
       matchId: match.matchId,
       createdAt: match.createdAt,
@@ -56,15 +71,25 @@ export class ChatService {
           identityKey: chatIdentityKey(match.initiator.identity),
           role: "initiator",
           socketId: match.initiator.socketId,
+          displayName: initiatorName,
         },
         {
           identityKey: chatIdentityKey(match.responder.identity),
           role: "responder",
           socketId: match.responder.socketId,
+          displayName: responderName,
         },
       ],
     };
     await this.store.createMatch(active);
+  }
+
+  /** Resolve a display name, falling back to a neutral name if it's gone. */
+  private async resolveDisplayName(
+    identity: RealtimeIdentity,
+  ): Promise<string> {
+    const name = await this.displayNames.resolve(identity);
+    return name ?? FALLBACK_DISPLAY_NAME;
   }
 
   /**
@@ -119,6 +144,43 @@ export class ChatService {
       status: "delivered",
       message,
       recipientSocketId: recipient.socketId,
+    };
+  }
+
+  /**
+   * Relay a typing toggle from {@link identity} to their match partner (story
+   * 40). Resolves to `relay` (with the partner's socket and the *sender's* role
+   * and frozen display name, so the partner can show "<name> is typing…"), or
+   * `no_active_match` when the sender is not in a live match — the same match
+   * boundary that guards `send`, so a stale typing event after a match end is
+   * dropped rather than delivered out of context. Carries no message content and
+   * never acknowledges the sender, so it can't become a read receipt (story 41).
+   */
+  async typing(
+    identity: RealtimeIdentity,
+    isTyping: boolean,
+  ): Promise<TypingResult> {
+    const senderKey = chatIdentityKey(identity);
+    const match = await this.store.getMatchByIdentity(senderKey);
+    if (!match) {
+      return { status: "no_active_match" };
+    }
+
+    const sender = match.participants.find((p) => p.identityKey === senderKey);
+    const recipient = match.participants.find(
+      (p) => p.identityKey !== senderKey,
+    );
+    if (!sender || !recipient) {
+      return { status: "no_active_match" };
+    }
+
+    return {
+      status: "relay",
+      matchId: match.matchId,
+      recipientSocketId: recipient.socketId,
+      from: sender.role,
+      displayName: sender.displayName,
+      isTyping,
     };
   }
 
