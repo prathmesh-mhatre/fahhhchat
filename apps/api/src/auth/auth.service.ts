@@ -8,7 +8,9 @@ import {
   isUserGender,
   productConfig,
   resolveAvatarSelection,
+  type GenderFilter,
   type OnboardingStatus,
+  type UserGender,
   type UserPreferences
 } from "@fahhhchat/config";
 import { generateDisplayIdentity } from "../identity/display-identity";
@@ -89,6 +91,24 @@ export class AuthService {
   async getUser(token: string | undefined): Promise<UserSummary | null> {
     const record = await this.resolveRecord(token);
     return record ? this.toSummary(record) : null;
+  }
+
+  /**
+   * The matching-relevant preferences for a logged-in user id: their declared
+   * gender (what others filter on) and their own gender filter. Read off the
+   * stored account — never client-asserted — so the matchmaking gateway can
+   * apply a strong gender preference (stories 30-32) it can trust. Falls back to
+   * "no preference" (null gender, "both" filter) for an unknown id, an account
+   * that hasn't onboarded, or one that has since been removed.
+   */
+  async getMatchPreferences(
+    userId: string
+  ): Promise<{ gender: UserGender | null; genderFilter: GenderFilter }> {
+    const record = await this.store.get(userId);
+    return {
+      gender: record?.gender ?? null,
+      genderFilter: record?.genderFilter ?? defaultGenderFilter
+    };
   }
 
   /**

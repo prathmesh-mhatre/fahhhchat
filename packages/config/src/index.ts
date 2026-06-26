@@ -19,6 +19,18 @@ export const productConfig = {
    */
   languageRelaxAfterSeconds: 15,
   /**
+   * How long a logged-in user with a *narrowing* gender filter (Male/Female)
+   * holds out for a declared logged-in user of that gender before matching
+   * relaxes and lets them fall back to guests — and to logged-in users whose
+   * gender doesn't match (stories 31-33, 35). The filter is a strong preference,
+   * never a promise, so the window is deliberately short but long enough to be a
+   * *visible* wait the web app can message ("Looking for your preference… we'll
+   * broaden the search shortly"). Independent of the language window: a waiter
+   * relaxes each axis on its own timer. Shared because the API enforces it and
+   * the web app surfaces it. "Both" carries no filter, so it never waits.
+   */
+  genderRelaxAfterSeconds: 20,
+  /**
    * Display-name editing rules shared by the API (which enforces them) and the
    * web app (which hints them in the editor). The PRD allows a once-daily
    * username change for guests and logged-in users (story 16), moderated before

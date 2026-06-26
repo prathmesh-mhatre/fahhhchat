@@ -9,19 +9,30 @@ const ORDER_KEY = "matchmaking:order";
 const PARTICIPANTS_KEY = "matchmaking:participants";
 
 /**
- * Atomically pop the best partner under staged language relaxation (story 36).
- * Pairing has to be a single atomic step so two simultaneous joiners can never
- * both claim the same waiting partner, which a read-then-remove from the API
- * would allow — hence the whole tiered decision runs here in Lua.
+ * Atomically pop the best partner under staged language *and* gender relaxation
+ * (stories 31-33, 36). Pairing has to be a single atomic step so two
+ * simultaneous joiners can never both claim the same waiting partner, which a
+ * read-then-remove from the API would allow — hence the whole tiered decision
+ * runs here in Lua. It mirrors {@link
+ * import("./in-memory-matchmaking.queue").InMemoryMatchmakingQueue.takeMatch}.
  *
- * Walking the order list head-first (oldest-first), it returns the first
- * same-language waiter; failing that, the oldest waiter past the relaxation
- * window (cross-language). A different-language waiter still inside its window is
- * left in place. Returns the participant JSON, or a Lua `false` (→ null in
- * ioredis) when nobody suitable waits.
+ * Walking the order list head-first (oldest-first), a waiter is *acceptable*
+ * when its language passes (same language, or past the language window) and its
+ * gender passes (the joiner's filter accepts the waiter, and the waiter's filter
+ * accepts the joiner or the waiter has relaxed past its gender window). The first
+ * *ideal* waiter (same language + both filters met, no relaxation) is returned
+ * at once; otherwise the oldest acceptable waiter. Returns the participant JSON,
+ * or a Lua `false` (→ null in ioredis) when nobody suitable waits.
+ *
+ * Gender constraints collapse to always-true when filtering is disabled
+ * (ARGV[5]="0"), so a killed `gender_filters` flag matches as if no one filtered.
+ * A null/undeclared gender is sent as "" and never satisfies a Male/Female
+ * filter, which is exactly why such users are the fallback (stories 32-33, 35).
  *
  * KEYS[1]=order list (head = oldest), KEYS[2]=participants hash.
- * ARGV: [1]=excludeKey, [2]=language, [3]=now (ms), [4]=relaxAfterMs.
+ * ARGV: [1]=excludeKey, [2]=language, [3]=now (ms), [4]=relaxAfterMs,
+ *       [5]=genderFilteringEnabled ("1"/"0"), [6]=gender, [7]=genderFilter,
+ *       [8]=genderRelaxAfterMs.
  */
 const TAKE_MATCH = `
 local order = KEYS[1]
@@ -30,29 +41,46 @@ local exclude = ARGV[1]
 local language = ARGV[2]
 local now = tonumber(ARGV[3])
 local relaxAfter = tonumber(ARGV[4])
+local genderFiltering = ARGV[5] == '1'
+local gender = ARGV[6]
+local genderFilter = ARGV[7]
+local genderRelaxAfter = tonumber(ARGV[8])
 local len = redis.call('LLEN', order)
-local relaxedKey = false
+local fallbackKey = false
 for i = 0, len - 1 do
   local key = redis.call('LINDEX', order, i)
   if key ~= exclude then
     local data = redis.call('HGET', participants, key)
     if data then
       local p = cjson.decode(data)
-      if p.language == language then
-        redis.call('LREM', order, 1, key)
-        redis.call('HDEL', participants, key)
-        return data
+      local waited = now - p.enqueuedAt
+      local sameLanguage = p.language == language
+      local languageOk = sameLanguage or waited >= relaxAfter
+      local joinerAcceptsWaiter = true
+      local waiterFilterMet = true
+      if genderFiltering then
+        joinerAcceptsWaiter = genderFilter == 'both' or p.gender == genderFilter
+        waiterFilterMet = p.genderFilter == 'both' or gender == p.genderFilter
       end
-      if relaxedKey == false and (now - p.enqueuedAt) >= relaxAfter then
-        relaxedKey = key
+      local waiterAcceptsJoiner = waiterFilterMet or waited >= genderRelaxAfter
+      local genderOk = joinerAcceptsWaiter and waiterAcceptsJoiner
+      if languageOk and genderOk then
+        if sameLanguage and joinerAcceptsWaiter and waiterFilterMet then
+          redis.call('LREM', order, 1, key)
+          redis.call('HDEL', participants, key)
+          return data
+        end
+        if fallbackKey == false then
+          fallbackKey = key
+        end
       end
     end
   end
 end
-if relaxedKey ~= false then
-  local data = redis.call('HGET', participants, relaxedKey)
-  redis.call('LREM', order, 1, relaxedKey)
-  redis.call('HDEL', participants, relaxedKey)
+if fallbackKey ~= false then
+  local data = redis.call('HGET', participants, fallbackKey)
+  redis.call('LREM', order, 1, fallbackKey)
+  redis.call('HDEL', participants, fallbackKey)
   return data
 end
 return false
@@ -105,7 +133,13 @@ export class RedisMatchmakingQueue implements MatchmakingQueue {
       criteria.excludeKey,
       criteria.language,
       String(criteria.now),
-      String(criteria.relaxAfterMs)
+      String(criteria.relaxAfterMs),
+      criteria.genderFilteringEnabled ? "1" : "0",
+      // Null/undeclared gender travels as "" so the Lua string compare is well
+      // defined and never satisfies a Male/Female filter.
+      criteria.gender ?? "",
+      criteria.genderFilter,
+      String(criteria.genderRelaxAfterMs)
     )) as string | null;
     return data ? (JSON.parse(data) as QueuedParticipant) : null;
   }

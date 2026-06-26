@@ -8,8 +8,8 @@ import type { RealtimeIdentity } from "../realtime/realtime.types";
 const guest = (id: string): RealtimeIdentity => ({ kind: "guest", id });
 const user = (id: string): RealtimeIdentity => ({ kind: "user", id });
 
-/** Build the service over real (in-memory) collaborators; queue_entry starts on. */
-function buildService(disabled: Array<"queue_entry"> = []) {
+/** Build the service over real (in-memory) collaborators; all kill switches start on. */
+function buildService(disabled: Array<"queue_entry" | "gender_filters"> = []) {
   const flags = new FeatureFlagsService(
     new InMemoryFeatureFlagStore(disabled),
     new InMemoryFeatureFlagAuditLog()
@@ -95,6 +95,8 @@ describe("MatchmakingService (stories 24-25, 37-38)", () => {
       totalMatches: 1,
       totalLanguageMatches: 1, // g1 and u1 both default to "en"
       totalRelaxedMatches: 0,
+      totalGenderFilteredMatches: 0, // no filter was in play
+      totalGenderRelaxedMatches: 0,
       totalLeaves: 1,
       totalRejectedUnavailable: 1,
     });
@@ -113,11 +115,11 @@ describe("MatchmakingService staged language relaxation (story 36)", () => {
     const t0 = new Date("2026-06-26T00:00:00.000Z");
 
     // An older Spanish speaker, then a newer English speaker, both waiting.
-    expect((await service.join(guest("es1"), "s1", es, t0)).status).toBe("queued");
-    expect((await service.join(guest("en1"), "s2", en, t0)).status).toBe("queued");
+    expect((await service.join(guest("es1"), "s1", { language: es }, t0)).status).toBe("queued");
+    expect((await service.join(guest("en1"), "s2", { language: en }, t0)).status).toBe("queued");
 
     // An English joiner pairs with the English speaker, not the older Spanish one.
-    const result = await service.join(user("en2"), "s3", en, t0);
+    const result = await service.join(user("en2"), "s3", { language: en }, t0);
     expect(result.status).toBe("matched");
     if (result.status !== "matched") throw new Error("expected a match");
     expect(result.match.responder.identity).toEqual(guest("en1"));
@@ -133,10 +135,10 @@ describe("MatchmakingService staged language relaxation (story 36)", () => {
     const { service } = buildService();
     const t0 = new Date("2026-06-26T00:00:00.000Z");
 
-    expect((await service.join(guest("es1"), "s1", es, t0)).status).toBe("queued");
+    expect((await service.join(guest("es1"), "s1", { language: es }, t0)).status).toBe("queued");
     // English joiner arrives immediately: no same-language partner, Spanish one
     // hasn't relaxed yet → the joiner waits instead of cross-matching.
-    expect((await service.join(guest("en1"), "s2", en, t0)).status).toBe("queued");
+    expect((await service.join(guest("en1"), "s2", { language: en }, t0)).status).toBe("queued");
     expect((await service.metrics()).waiting).toBe(2);
   });
 
@@ -144,10 +146,10 @@ describe("MatchmakingService staged language relaxation (story 36)", () => {
     const { service } = buildService();
     const t0 = new Date("2026-06-26T00:00:00.000Z");
 
-    expect((await service.join(guest("es1"), "s1", es, t0)).status).toBe("queued");
+    expect((await service.join(guest("es1"), "s1", { language: es }, t0)).status).toBe("queued");
 
     // Later, an English joiner arrives after the Spanish speaker's window lapses.
-    const result = await service.join(user("en1"), "s2", en, past(t0));
+    const result = await service.join(user("en1"), "s2", { language: en }, past(t0));
     expect(result.status).toBe("matched");
     if (result.status !== "matched") throw new Error("expected a match");
     expect(result.match.responder.identity).toEqual(guest("es1"));
@@ -155,5 +157,82 @@ describe("MatchmakingService staged language relaxation (story 36)", () => {
     const metrics = await service.metrics();
     expect(metrics.totalRelaxedMatches).toBe(1);
     expect(metrics.totalLanguageMatches).toBe(0);
+  });
+});
+
+describe("MatchmakingService gender-filtered matching (stories 31-33, 35)", () => {
+  const t0 = new Date("2026-06-26T00:00:00.000Z");
+  /** Past the 20s gender window so a waiter is fall-back eligible. */
+  const pastGender = (base: Date) => new Date(base.getTime() + 21 * 1000);
+
+  it("matches a filtered joiner with a declared user of that gender (story 32)", async () => {
+    const { service } = buildService();
+
+    // A declared female user waits; a male joiner filtering for women pairs with
+    // her at once and the match counts as a fully-honored gender match.
+    expect(
+      (await service.join(user("f1"), "s1", { gender: "female" }, t0)).status
+    ).toBe("queued");
+    const result = await service.join(
+      user("m1"),
+      "s2",
+      { gender: "male", genderFilter: "female" },
+      t0
+    );
+    expect(result.status).toBe("matched");
+    if (result.status !== "matched") throw new Error("expected a match");
+    expect(result.match.responder.identity).toEqual(user("f1"));
+
+    const metrics = await service.metrics();
+    expect(metrics.totalGenderFilteredMatches).toBe(1);
+    expect(metrics.totalGenderRelaxedMatches).toBe(0);
+  });
+
+  it("holds a filtered joiner rather than matching a guest inside the window (story 33)", async () => {
+    const { service } = buildService();
+
+    // Only a guest (gender unknown) is waiting; a female-filtering joiner won't
+    // settle for them yet, so both end up waiting.
+    expect((await service.join(guest("g1"), "s1", {}, t0)).status).toBe("queued");
+    expect(
+      (await service.join(user("m1"), "s2", { gender: "male", genderFilter: "female" }, t0)).status
+    ).toBe("queued");
+    expect((await service.metrics()).waiting).toBe(2);
+  });
+
+  it("falls back to a guest after the visible wait window (stories 33, 35)", async () => {
+    const { service } = buildService();
+
+    // A male user filtering for women waits; no women arrive.
+    expect(
+      (await service.join(user("m1"), "s1", { gender: "male", genderFilter: "female" }, t0)).status
+    ).toBe("queued");
+
+    // Past his window, a guest joins and now pairs with him — the strong gender
+    // preference relaxed to a guest fall-back, recorded as a relaxed match.
+    const result = await service.join(guest("g1"), "s2", {}, pastGender(t0));
+    expect(result.status).toBe("matched");
+    if (result.status !== "matched") throw new Error("expected a match");
+    expect(result.match.responder.identity).toEqual(user("m1"));
+
+    const metrics = await service.metrics();
+    expect(metrics.totalGenderFilteredMatches).toBe(0);
+    expect(metrics.totalGenderRelaxedMatches).toBe(1);
+  });
+
+  it("ignores gender filters when the gender_filters kill switch is off (story 84)", async () => {
+    const { service } = buildService(["gender_filters"]);
+
+    // A male user filtering for women is waiting; with filtering disabled a guest
+    // joins and matches immediately, and no gender health counter moves.
+    expect(
+      (await service.join(user("m1"), "s1", { gender: "male", genderFilter: "female" }, t0)).status
+    ).toBe("queued");
+    const result = await service.join(guest("g1"), "s2", {}, t0);
+    expect(result.status).toBe("matched");
+
+    const metrics = await service.metrics();
+    expect(metrics.totalGenderFilteredMatches).toBe(0);
+    expect(metrics.totalGenderRelaxedMatches).toBe(0);
   });
 });

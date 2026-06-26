@@ -1,7 +1,8 @@
-import type {
-  MatchCriteria,
-  MatchmakingQueue,
-  QueuedParticipant,
+import {
+  genderFilterSatisfiedBy,
+  type MatchCriteria,
+  type MatchmakingQueue,
+  type QueuedParticipant,
 } from "./matchmaking.types";
 
 /**
@@ -36,28 +37,52 @@ export class InMemoryMatchmakingQueue implements MatchmakingQueue {
   }
 
   async takeMatch(criteria: MatchCriteria): Promise<QueuedParticipant | null> {
-    const { excludeKey, language, now, relaxAfterMs } = criteria;
+    const { excludeKey, now } = criteria;
     // The Map iterates in insertion order, i.e. oldest-first, so the first
     // candidate found in each tier is the longest-waiting one (no starvation).
-    let relaxed: { key: string; participant: QueuedParticipant } | null = null;
+    let fallback: { key: string; participant: QueuedParticipant } | null = null;
     for (const [key, participant] of this.waiting) {
       if (key === excludeKey) {
         continue;
       }
-      // Same-language is the preferred tier; take the oldest such waiter at once.
-      if (participant.language === language) {
+
+      const waited = now - participant.enqueuedAt;
+      const sameLanguage = participant.language === criteria.language;
+      const languageOk = sameLanguage || waited >= criteria.relaxAfterMs;
+
+      // The joiner's filter (full strength — they just arrived) must accept the
+      // waiter's declared gender; the waiter's own filter must accept the joiner
+      // *or* have relaxed past its window. Both pass automatically when filtering
+      // is off (kill switch), so the pool behaves as if no one filtered.
+      const joinerAcceptsWaiter =
+        !criteria.genderFilteringEnabled ||
+        genderFilterSatisfiedBy(criteria.genderFilter, participant.gender);
+      const waiterFilterMet =
+        !criteria.genderFilteringEnabled ||
+        genderFilterSatisfiedBy(participant.genderFilter, criteria.gender);
+      const waiterAcceptsJoiner =
+        waiterFilterMet || waited >= criteria.genderRelaxAfterMs;
+      const genderOk = joinerAcceptsWaiter && waiterAcceptsJoiner;
+
+      if (!languageOk || !genderOk) {
+        continue;
+      }
+
+      // Ideal: same language and both filters met with no relaxation on either
+      // axis. Oldest-first means the first ideal waiter is the oldest, so take it.
+      if (sameLanguage && joinerAcceptsWaiter && waiterFilterMet) {
         this.waiting.delete(key);
         return participant;
       }
-      // Otherwise remember the oldest cross-language waiter past the relaxation
-      // window, used only if no same-language partner turns up in this scan.
-      if (relaxed === null && now - participant.enqueuedAt >= relaxAfterMs) {
-        relaxed = { key, participant };
+      // Otherwise remember the oldest acceptable (but relaxed) waiter, used only
+      // if no ideal partner turns up in this scan.
+      if (fallback === null) {
+        fallback = { key, participant };
       }
     }
-    if (relaxed) {
-      this.waiting.delete(relaxed.key);
-      return relaxed.participant;
+    if (fallback) {
+      this.waiting.delete(fallback.key);
+      return fallback.participant;
     }
     return null;
   }

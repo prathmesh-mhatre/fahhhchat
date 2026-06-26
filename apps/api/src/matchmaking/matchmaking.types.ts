@@ -1,14 +1,17 @@
-import type { LanguageCode } from "@fahhhchat/config";
+import type {
+  GenderFilter,
+  LanguageCode,
+  UserGender,
+} from "@fahhhchat/config";
 import type { RealtimeIdentity } from "../realtime/realtime.types";
 
 /**
  * A single user waiting in the shared matching pool. The PRD uses *one* global
  * pool for both guests and logged-in users (stories 24-25, "one shared matching
  * pool"), so a participant is their realtime {@link RealtimeIdentity}, the socket
- * to reach them on, when they joined, and their matching-language preference.
- * Language is a *soft* signal: the pool prefers a same-language partner initially
- * and relaxes across languages over time (story 36); gender filtering is a
- * separate soft constraint that lands in #19.
+ * to reach them on, when they joined, and their soft matching preferences.
+ * Language and gender are both *soft* signals the pool prefers initially and
+ * relaxes over time (stories 31-33, 36), each on its own relaxation timer.
  */
 export interface QueuedParticipant {
   identity: RealtimeIdentity;
@@ -23,6 +26,22 @@ export interface QueuedParticipant {
    * matchable across languages once the relaxation window passes.
    */
   language: LanguageCode;
+  /**
+   * The user's self-declared gender (story 29), or null when unknown — every
+   * guest (guests never declare gender) and any logged-in user who hasn't set
+   * one. This is what *other* users filter on, so it is the server-side declared
+   * value, never client-asserted. `prefer_not_to_say` is a real declared value
+   * but, like null, satisfies no Male/Female filter.
+   */
+  gender: UserGender | null;
+  /**
+   * The user's own gender filter (story 30): "both" (the default, no filtering),
+   * "male", or "female". A strong preference, not a promise (story 31) — a
+   * narrowing filter prefers declared logged-in users of that gender and relaxes
+   * to everyone (guests included) once the participant passes their gender
+   * relaxation window. Guests are always "both".
+   */
+  genderFilter: GenderFilter;
 }
 
 /**
@@ -36,11 +55,11 @@ export function identityKey(identity: RealtimeIdentity): string {
 }
 
 /**
- * Inputs to the staged pairing step (story 36). The pool first honors the
- * joiner's {@link language}; failing that it relaxes and pairs them with any
- * waiter who has waited at least {@link relaxAfterMs}. Passing the joiner's own
- * key as {@link excludeKey} keeps a duplicate join (e.g. a second tab) from
- * self-matching.
+ * Inputs to the staged pairing step (stories 31-33, 36). The pool first honors
+ * the joiner's {@link language} and gender constraints; failing that it relaxes
+ * each axis independently for a waiter who has waited at least the matching
+ * window. Passing the joiner's own key as {@link excludeKey} keeps a duplicate
+ * join (e.g. a second tab) from self-matching.
  */
 export interface MatchCriteria {
   /** Identity key to never return (the joiner themselves). */
@@ -51,6 +70,40 @@ export interface MatchCriteria {
   now: number;
   /** How long (ms) a waiter must have waited to be eligible across languages. */
   relaxAfterMs: number;
+  /**
+   * Whether gender filtering applies at all. False when the `gender_filters`
+   * kill switch is off (story 84): every gender constraint — the joiner's and
+   * every waiter's — is ignored so the pool behaves as if no one filtered.
+   */
+  genderFilteringEnabled: boolean;
+  /**
+   * The joiner's self-declared gender, used to satisfy a *waiter's* filter. Null
+   * for guests and undeclared users; never satisfies a Male/Female filter.
+   */
+  gender: UserGender | null;
+  /** The joiner's own gender filter; constrains which waiters are acceptable. */
+  genderFilter: GenderFilter;
+  /**
+   * How long (ms) a waiter must have waited before their gender preference (both
+   * the joiner's filter against them and their own filter) relaxes to allow a
+   * fallback match — the visible wait window of stories 32-33.
+   */
+  genderRelaxAfterMs: number;
+}
+
+/**
+ * Whether a gender {@link GenderFilter} is satisfied by a candidate's declared
+ * {@link UserGender}. "Both" carries no constraint; a narrowing Male/Female
+ * filter is met only by that exact declared gender — so a guest (null), an
+ * undeclared user (null), or a `prefer_not_to_say` user never satisfies it,
+ * which is exactly why such users are the *fallback* the filter relaxes to
+ * (stories 32-33, 35) rather than a preferred match.
+ */
+export function genderFilterSatisfiedBy(
+  filter: GenderFilter,
+  gender: UserGender | null
+): boolean {
+  return filter === "both" || gender === filter;
 }
 
 /**
@@ -76,17 +129,23 @@ export interface MatchmakingQueue {
   contains(key: string): Promise<boolean>;
   /**
    * Atomically remove and return the best partner for a joiner under staged
-   * language relaxation (story 36), or null if no suitable waiter exists. The
-   * preference order, evaluated oldest-first so nobody starves within a tier, is:
+   * language *and* gender relaxation (stories 31-33, 36), or null if no suitable
+   * waiter exists. A waiter is *acceptable* when both axes pass:
    *
-   *   1. the oldest waiter sharing the joiner's {@link MatchCriteria.language};
-   *   2. otherwise the oldest waiter who has already waited at least
-   *      `relaxAfterMs` — relaxed across languages so wait times stay low and a
-   *      long-waiting stranger isn't stranded.
+   *   - language: the joiner shares the waiter's language, OR the waiter has
+   *     waited past `relaxAfterMs` (relaxed across languages);
+   *   - gender: the joiner's filter is satisfied by the waiter's declared gender,
+   *     AND the waiter's own filter is satisfied by the joiner's gender OR the
+   *     waiter has waited past `genderRelaxAfterMs`. Both sides' strong
+   *     preferences are honored until each waiter's own window lapses, after
+   *     which they fall back to anyone — guests included (story 35).
    *
-   * A waiter of a different language who is still inside their relaxation window
-   * is left in the pool. {@link MatchCriteria.excludeKey} is never returned, so a
-   * user (even across duplicate tabs) can never match themselves.
+   * Among acceptable waiters, an *ideal* one (same language and both filters met
+   * with no relaxation) is taken first; otherwise the oldest acceptable waiter
+   * wins. Evaluation is oldest-first so nobody starves within a tier. A waiter
+   * still inside both windows whose constraints aren't met is left in the pool.
+   * {@link MatchCriteria.excludeKey} is never returned, so a user (even across
+   * duplicate tabs) can never match themselves.
    */
   takeMatch(criteria: MatchCriteria): Promise<QueuedParticipant | null>;
   /**
@@ -99,6 +158,23 @@ export interface MatchmakingQueue {
 }
 
 export const MATCHMAKING_QUEUE = Symbol("MATCHMAKING_QUEUE");
+
+/**
+ * The joiner's soft matching preferences, passed to {@link
+ * import("./matchmaking.service").MatchmakingService.join}. All optional with
+ * safe defaults: {@link language} defaults to the supported default, and gender
+ * is treated as "no preference" (filter "both", gender null) — the right default
+ * for a guest, who never declares either. A logged-in joiner's values are
+ * resolved server-side from their stored account, never asserted by the client.
+ */
+export interface JoinPreferences {
+  /** Matching language signal (stories 26-28, 36). */
+  language?: LanguageCode;
+  /** Self-declared gender shown to others' filters (story 29). */
+  gender?: UserGender | null;
+  /** The joiner's own gender filter (story 30). */
+  genderFilter?: GenderFilter;
+}
 
 /**
  * A created one-to-one match. The pairing is symmetric, but WebRTC and other
@@ -147,6 +223,20 @@ export interface QueueMetrics {
    * language pools / long language waits worth investigating (story 38).
    */
   totalRelaxedMatches: number;
+  /**
+   * Matches where a gender filter was in play (one or both sides narrowed) and
+   * fully honored — the filtering user got a declared logged-in user of their
+   * chosen gender (story 32). High vs. {@link totalGenderRelaxedMatches} tells
+   * operators gender inventory is healthy.
+   */
+  totalGenderFilteredMatches: number;
+  /**
+   * Matches where a gender filter was in play but *not* met, so the filtering
+   * user fell back to a guest or a non-matching logged-in user after their
+   * visible wait window (stories 33, 35). A rising share signals thin
+   * gender inventory worth investigating (story 38).
+   */
+  totalGenderRelaxedMatches: number;
   /** Total explicit leaves (user left the queue before matching). */
   totalLeaves: number;
   /** Joins rejected because the queue_entry kill switch was off. */

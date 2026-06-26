@@ -1,4 +1,7 @@
 import type { Server, Socket } from "socket.io";
+import { AuthService } from "../auth/auth.service";
+import { InMemoryUserStore } from "../auth/in-memory-user.store";
+import { DevMockTokenVerifier } from "../auth/google-token-verifier";
 import { FeatureFlagsService } from "../feature-flags/feature-flags.service";
 import { InMemoryFeatureFlagStore } from "../feature-flags/in-memory-feature-flag.store";
 import { InMemoryFeatureFlagAuditLog } from "../feature-flags/in-memory-feature-flag-audit.log";
@@ -46,22 +49,50 @@ function fakeServer() {
   return { server, delivered };
 }
 
-function buildGateway(disabled: Array<"queue_entry"> = []) {
+function buildGateway(disabled: Array<"queue_entry" | "gender_filters"> = []) {
   const flags = new FeatureFlagsService(
     new InMemoryFeatureFlagStore(disabled),
     new InMemoryFeatureFlagAuditLog()
   );
   const service = new MatchmakingService(new InMemoryMatchmakingQueue(), flags);
-  const gateway = new MatchmakingGateway(service);
+  // The gateway reads a logged-in joiner's declared gender + filter off the
+  // account, so it needs a real AuthService over an (seedable) in-memory store.
+  const store = new InMemoryUserStore();
+  const auth = new AuthService(store, new DevMockTokenVerifier(), flags);
+  const gateway = new MatchmakingGateway(service, auth);
   const { server, delivered } = fakeServer();
   (gateway as unknown as { server: Server }).server = server;
-  return { gateway, delivered, service };
+  return { gateway, delivered, service, store };
+}
+
+/** Seed a logged-in account with declared gender + filter for the gateway to read. */
+async function seedUser(
+  store: InMemoryUserStore,
+  userId: string,
+  gender: "male" | "female",
+  genderFilter: "male" | "female" | "both"
+): Promise<void> {
+  const now = new Date().toISOString();
+  await store.save({
+    userId,
+    googleSub: `sub-${userId}`,
+    email: `${userId}@example.test`,
+    createdAt: now,
+    lastLoginAt: now,
+    gender,
+    genderFilter,
+  });
 }
 
 const guest = (id: string): RealtimeIdentity => ({ kind: "guest", id });
 const user = (id: string): RealtimeIdentity => ({ kind: "user", id });
 
 describe("MatchmakingGateway", () => {
+  beforeAll(() => {
+    // AuthService signs tokens on construction; matching never mints one here,
+    // but the constructor still requires the secret to be present.
+    process.env.AUTH_SECRET = "test-secret";
+  });
   it("refuses a join from a socket with no authenticated identity", async () => {
     const { gateway } = buildGateway();
     const { socket, emitted } = fakeSocket("s1"); // no identity
@@ -159,5 +190,47 @@ describe("MatchmakingGateway", () => {
     await gateway.handleDisconnect(socket);
 
     expect((await service.metrics()).waiting).toBe(0);
+  });
+
+  it("applies a logged-in joiner's stored gender filter to matching (stories 30-32)", async () => {
+    const { gateway, delivered, service, store } = buildGateway();
+    // u1 declares male and filters for women; u3 is male, u2 female.
+    await seedUser(store, "u1", "male", "female");
+    await seedUser(store, "u3", "male", "both");
+    await seedUser(store, "u2", "female", "both");
+    const filtering = fakeSocket("s1", user("u1"));
+    const male = fakeSocket("s3", user("u3"));
+    const female = fakeSocket("s2", user("u2"));
+
+    // u1 waits, then a male user joins: u1's stored female filter rejects him, so
+    // both wait rather than pairing — the filter is read off the account.
+    await gateway.handleJoin(filtering.socket);
+    await gateway.handleJoin(male.socket);
+    expect((await service.metrics()).waiting).toBe(2);
+
+    // A declared female user then pairs with u1, honoring the stored filter, and
+    // the male is left waiting.
+    await gateway.handleJoin(female.socket);
+    const found = delivered.filter(
+      (d) => d.event === MATCHMAKING_EVENTS.matchFound
+    );
+    expect(found.map((d) => d.to).sort()).toEqual(["s1", "s2"]);
+    expect((await service.metrics()).totalGenderFilteredMatches).toBe(1);
+    expect((await service.metrics()).waiting).toBe(1);
+  });
+
+  it("treats guests as carrying no gender filter", async () => {
+    const { gateway, delivered } = buildGateway();
+    const a = fakeSocket("s1", guest("g1"));
+    const b = fakeSocket("s2", guest("g2"));
+
+    // Two guests pair immediately — guests declare no gender and no filter.
+    await gateway.handleJoin(a.socket);
+    await gateway.handleJoin(b.socket);
+
+    const found = delivered.filter(
+      (d) => d.event === MATCHMAKING_EVENTS.matchFound
+    );
+    expect(found).toHaveLength(2);
   });
 });
