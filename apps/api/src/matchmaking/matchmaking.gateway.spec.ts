@@ -2,6 +2,8 @@ import type { Server, Socket } from "socket.io";
 import { AuthService } from "../auth/auth.service";
 import { InMemoryUserStore } from "../auth/in-memory-user.store";
 import { DevMockTokenVerifier } from "../auth/google-token-verifier";
+import { ChatService } from "../chat/chat.service";
+import { InMemoryChatStore } from "../chat/in-memory-chat.store";
 import { FeatureFlagsService } from "../feature-flags/feature-flags.service";
 import { InMemoryFeatureFlagStore } from "../feature-flags/in-memory-feature-flag.store";
 import { InMemoryFeatureFlagAuditLog } from "../feature-flags/in-memory-feature-flag-audit.log";
@@ -66,10 +68,13 @@ function buildGateway(disabled: Array<"queue_entry" | "gender_filters"> = []) {
   // account, so it needs a real AuthService over an (seedable) in-memory store.
   const store = new InMemoryUserStore();
   const auth = new AuthService(store, new DevMockTokenVerifier(), flags);
-  const gateway = new MatchmakingGateway(service, auth);
+  // The gateway registers each new pair with the chat layer; a real ChatService
+  // over an in-memory store lets the test assert the active match was created.
+  const chat = new ChatService(new InMemoryChatStore());
+  const gateway = new MatchmakingGateway(service, auth, chat);
   const { server, delivered } = fakeServer();
   (gateway as unknown as { server: Server }).server = server;
-  return { gateway, delivered, service, store };
+  return { gateway, delivered, service, store, chat };
 }
 
 /** Seed a logged-in account with declared gender + filter for the gateway to read. */
@@ -143,6 +148,21 @@ describe("MatchmakingGateway", () => {
     expect(initiator.role).toBe("initiator"); // the joiner who triggered the pair
     expect(responder.role).toBe("responder"); // the one who was waiting
     expect(initiator.matchId).toBe(responder.matchId);
+  });
+
+  it("registers the active match with the chat layer so messages can route (issue #21)", async () => {
+    const { gateway, chat } = buildGateway();
+    const a = fakeSocket("s1", guest("g1"));
+    const b = fakeSocket("s2", user("u1"));
+
+    await gateway.handleJoin(a.socket); // queued
+    await gateway.handleJoin(b.socket); // matches g1
+
+    // Both sides resolve to the same active match the instant they are paired.
+    const forGuest = await chat.activeMatchFor(guest("g1"));
+    const forUser = await chat.activeMatchFor(user("u1"));
+    expect(forGuest).not.toBeNull();
+    expect(forUser?.matchId).toBe(forGuest?.matchId);
   });
 
   it("passes the join payload's language through to matching (story 36)", async () => {

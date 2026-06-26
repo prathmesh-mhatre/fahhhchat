@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
+import { ChatModule } from "../chat/chat.module";
 import { ConsentModule } from "../consent/consent.module";
 import { FeatureFlagsModule } from "../feature-flags/feature-flags.module";
 import { MatchmakingModule } from "../matchmaking/matchmaking.module";
@@ -14,7 +15,8 @@ import { HealthController } from "./health.controller";
     AuthModule,
     RealtimeModule,
     FeatureFlagsModule,
-    MatchmakingModule
+    MatchmakingModule,
+    ChatModule
   ],
   controllers: [HealthController]
 })
