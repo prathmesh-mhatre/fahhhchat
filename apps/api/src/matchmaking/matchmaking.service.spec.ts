@@ -93,8 +93,67 @@ describe("MatchmakingService (stories 24-25, 37-38)", () => {
       waiting: 0,
       totalJoins: 3,
       totalMatches: 1,
+      totalLanguageMatches: 1, // g1 and u1 both default to "en"
+      totalRelaxedMatches: 0,
       totalLeaves: 1,
       totalRejectedUnavailable: 1,
     });
+  });
+});
+
+describe("MatchmakingService staged language relaxation (story 36)", () => {
+  const en = "en" as const;
+  const es = "es" as const;
+  /** Far enough past the relax window (15s) that a waiter is cross-language eligible. */
+  const past = (base: Date) =>
+    new Date(base.getTime() + 16 * 1000);
+
+  it("prefers a same-language partner over an older different-language waiter", async () => {
+    const { service } = buildService();
+    const t0 = new Date("2026-06-26T00:00:00.000Z");
+
+    // An older Spanish speaker, then a newer English speaker, both waiting.
+    expect((await service.join(guest("es1"), "s1", es, t0)).status).toBe("queued");
+    expect((await service.join(guest("en1"), "s2", en, t0)).status).toBe("queued");
+
+    // An English joiner pairs with the English speaker, not the older Spanish one.
+    const result = await service.join(user("en2"), "s3", en, t0);
+    expect(result.status).toBe("matched");
+    if (result.status !== "matched") throw new Error("expected a match");
+    expect(result.match.responder.identity).toEqual(guest("en1"));
+
+    // The Spanish speaker is still waiting and the match counted as a language match.
+    const metrics = await service.metrics();
+    expect(metrics.waiting).toBe(1);
+    expect(metrics.totalLanguageMatches).toBe(1);
+    expect(metrics.totalRelaxedMatches).toBe(0);
+  });
+
+  it("queues rather than matching a different-language partner inside the window", async () => {
+    const { service } = buildService();
+    const t0 = new Date("2026-06-26T00:00:00.000Z");
+
+    expect((await service.join(guest("es1"), "s1", es, t0)).status).toBe("queued");
+    // English joiner arrives immediately: no same-language partner, Spanish one
+    // hasn't relaxed yet → the joiner waits instead of cross-matching.
+    expect((await service.join(guest("en1"), "s2", en, t0)).status).toBe("queued");
+    expect((await service.metrics()).waiting).toBe(2);
+  });
+
+  it("relaxes across languages once the waiter passes the relax window", async () => {
+    const { service } = buildService();
+    const t0 = new Date("2026-06-26T00:00:00.000Z");
+
+    expect((await service.join(guest("es1"), "s1", es, t0)).status).toBe("queued");
+
+    // Later, an English joiner arrives after the Spanish speaker's window lapses.
+    const result = await service.join(user("en1"), "s2", en, past(t0));
+    expect(result.status).toBe("matched");
+    if (result.status !== "matched") throw new Error("expected a match");
+    expect(result.match.responder.identity).toEqual(guest("es1"));
+
+    const metrics = await service.metrics();
+    expect(metrics.totalRelaxedMatches).toBe(1);
+    expect(metrics.totalLanguageMatches).toBe(0);
   });
 });

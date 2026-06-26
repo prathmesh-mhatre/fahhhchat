@@ -1,29 +1,59 @@
 import type { Redis } from "ioredis";
-import type { MatchmakingQueue, QueuedParticipant } from "./matchmaking.types";
+import type {
+  MatchCriteria,
+  MatchmakingQueue,
+  QueuedParticipant,
+} from "./matchmaking.types";
 
 const ORDER_KEY = "matchmaking:order";
 const PARTICIPANTS_KEY = "matchmaking:participants";
 
 /**
- * Atomically pop the oldest waiting key that is not `exclude`. Pairing has to be
- * a single atomic step so two simultaneous joiners can never both claim the same
- * waiting partner, which a read-then-remove from the API would allow. Returns
- * the participant JSON, or a Lua `false` (→ null in ioredis) when nobody else
- * waits. KEYS[1]=order list (head = oldest), KEYS[2]=participants hash.
+ * Atomically pop the best partner under staged language relaxation (story 36).
+ * Pairing has to be a single atomic step so two simultaneous joiners can never
+ * both claim the same waiting partner, which a read-then-remove from the API
+ * would allow — hence the whole tiered decision runs here in Lua.
+ *
+ * Walking the order list head-first (oldest-first), it returns the first
+ * same-language waiter; failing that, the oldest waiter past the relaxation
+ * window (cross-language). A different-language waiter still inside its window is
+ * left in place. Returns the participant JSON, or a Lua `false` (→ null in
+ * ioredis) when nobody suitable waits.
+ *
+ * KEYS[1]=order list (head = oldest), KEYS[2]=participants hash.
+ * ARGV: [1]=excludeKey, [2]=language, [3]=now (ms), [4]=relaxAfterMs.
  */
-const TAKE_OLDEST_EXCEPT = `
+const TAKE_MATCH = `
 local order = KEYS[1]
 local participants = KEYS[2]
 local exclude = ARGV[1]
+local language = ARGV[2]
+local now = tonumber(ARGV[3])
+local relaxAfter = tonumber(ARGV[4])
 local len = redis.call('LLEN', order)
+local relaxedKey = false
 for i = 0, len - 1 do
   local key = redis.call('LINDEX', order, i)
   if key ~= exclude then
-    redis.call('LREM', order, 1, key)
     local data = redis.call('HGET', participants, key)
-    redis.call('HDEL', participants, key)
-    return data
+    if data then
+      local p = cjson.decode(data)
+      if p.language == language then
+        redis.call('LREM', order, 1, key)
+        redis.call('HDEL', participants, key)
+        return data
+      end
+      if relaxedKey == false and (now - p.enqueuedAt) >= relaxAfter then
+        relaxedKey = key
+      end
+    end
   end
+end
+if relaxedKey ~= false then
+  local data = redis.call('HGET', participants, relaxedKey)
+  redis.call('LREM', order, 1, relaxedKey)
+  redis.call('HDEL', participants, relaxedKey)
+  return data
 end
 return false
 `;
@@ -66,13 +96,16 @@ export class RedisMatchmakingQueue implements MatchmakingQueue {
     return (await this.redis.hexists(PARTICIPANTS_KEY, key)) === 1;
   }
 
-  async takeOldestExcept(excludeKey: string): Promise<QueuedParticipant | null> {
+  async takeMatch(criteria: MatchCriteria): Promise<QueuedParticipant | null> {
     const data = (await this.redis.eval(
-      TAKE_OLDEST_EXCEPT,
+      TAKE_MATCH,
       2,
       ORDER_KEY,
       PARTICIPANTS_KEY,
-      excludeKey
+      criteria.excludeKey,
+      criteria.language,
+      String(criteria.now),
+      String(criteria.relaxAfterMs)
     )) as string | null;
     return data ? (JSON.parse(data) as QueuedParticipant) : null;
   }

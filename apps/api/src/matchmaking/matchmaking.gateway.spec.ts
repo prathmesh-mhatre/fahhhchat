@@ -107,6 +107,27 @@ describe("MatchmakingGateway", () => {
     expect(initiator.matchId).toBe(responder.matchId);
   });
 
+  it("passes the join payload's language through to matching (story 36)", async () => {
+    const { gateway, delivered, service } = buildGateway();
+    const es = fakeSocket("s1", guest("g1"));
+    const en = fakeSocket("s2", user("u1"));
+    const es2 = fakeSocket("s3", guest("g2"));
+
+    // A Spanish and an English speaker arrive: no same-language partner for
+    // either and neither has relaxed yet, so both wait.
+    await gateway.handleJoin(es.socket, { language: "es" });
+    await gateway.handleJoin(en.socket, { language: "en" });
+    expect((await service.metrics()).waiting).toBe(2);
+
+    // A second Spanish speaker pairs with the first, leaving the English one.
+    await gateway.handleJoin(es2.socket, { language: "es" });
+    const found = delivered.filter(
+      (d) => d.event === MATCHMAKING_EVENTS.matchFound
+    );
+    expect(found.map((d) => d.to).sort()).toEqual(["s1", "s3"]);
+    expect((await service.metrics()).totalLanguageMatches).toBe(1);
+  });
+
   it("emits an error when queue entry is killed (story 84)", async () => {
     const { gateway } = buildGateway(["queue_entry"]);
     const { socket, emitted } = fakeSocket("s1", guest("g1"));
