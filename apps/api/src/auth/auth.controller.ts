@@ -36,6 +36,12 @@ interface ChangeAvatarBody {
   backgroundColor?: unknown;
 }
 
+interface SavePreferencesBody {
+  matchingLanguage?: unknown;
+  gender?: unknown;
+  uiLanguage?: unknown;
+}
+
 @Controller("auth")
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
@@ -104,6 +110,19 @@ export class AuthController {
   async changeAvatar(@Body() body: ChangeAvatarBody, @Req() req: Request) {
     const token = req.cookies?.[USER_COOKIE_NAME];
     return this.auth.changeAvatar(token, body?.avatarId, body?.backgroundColor);
+  }
+
+  /**
+   * Saves the account's matching language and gender (and optional separate UI
+   * language) for lightweight onboarding or a later preference edit (stories
+   * 27-29). The server validates against the supported sets.
+   */
+  @Post("preferences")
+  @HttpCode(200)
+  @UseGuards(AuthGuard)
+  async savePreferences(@Body() body: SavePreferencesBody, @Req() req: Request) {
+    const token = req.cookies?.[USER_COOKIE_NAME];
+    return this.auth.setPreferences(token, body?.matchingLanguage, body?.gender, body?.uiLanguage);
   }
 
   /** Clears the app session cookie (logout). */

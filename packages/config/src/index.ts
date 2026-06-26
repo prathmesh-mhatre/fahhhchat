@@ -66,6 +66,99 @@ export function encodeMockGoogleToken(identity: { sub: string; email: string }):
   return MOCK_GOOGLE_TOKEN_PREFIX + Buffer.from(JSON.stringify(identity)).toString("base64url");
 }
 
+/**
+ * Curated set of languages users can pick as their *matching* language signal
+ * (story 28) and, separately, their *UI* language (story 27). Both surfaces
+ * share this list for the MVP — the data model keeps the two as distinct
+ * preference fields so they can diverge later, but offering one supported set
+ * keeps onboarding simple. Labels are shown in their own language so the picker
+ * is legible regardless of the current UI language. Shared here because the API
+ * validates submissions against this exact set and the web app renders it.
+ */
+export const matchingLanguages = [
+  { code: "en", label: "English" },
+  { code: "es", label: "Español" },
+  { code: "pt", label: "Português" },
+  { code: "fr", label: "Français" },
+  { code: "de", label: "Deutsch" },
+  { code: "it", label: "Italiano" },
+  { code: "hi", label: "हिन्दी" },
+  { code: "ar", label: "العربية" },
+  { code: "ru", label: "Русский" },
+  { code: "zh", label: "中文" },
+  { code: "ja", label: "日本語" },
+  { code: "id", label: "Bahasa Indonesia" },
+  { code: "tr", label: "Türkçe" }
+] as const;
+
+export type LanguageCode = (typeof matchingLanguages)[number]["code"];
+
+/** Fallback when a browser language isn't supported or none is declared. */
+export const defaultLanguage: LanguageCode = "en";
+
+/** Type-guard for a supported language code. */
+export function isLanguageCode(value: unknown): value is LanguageCode {
+  return typeof value === "string" && matchingLanguages.some((lang) => lang.code === value);
+}
+
+/**
+ * Normalize a raw browser language tag (e.g. "en-US", "pt-BR", "zh-Hans") to a
+ * supported language code, used to seed both the matching- and UI-language
+ * defaults from the browser during onboarding (stories 26-28). Falls back to
+ * {@link defaultLanguage} when the language isn't in the supported set.
+ */
+export function resolveLanguage(browserLanguage: unknown): LanguageCode {
+  if (typeof browserLanguage !== "string") {
+    return defaultLanguage;
+  }
+  const primary = browserLanguage.toLowerCase().split("-")[0];
+  return isLanguageCode(primary) ? primary : defaultLanguage;
+}
+
+/**
+ * Self-declared gender used by gender filters (story 29). Deliberately minimal —
+ * Male, Female, or an explicit "prefer not to say" — so filtering can work
+ * without forcing more disclosure. Logged-in only; guests never declare gender.
+ */
+export const genderOptions = [
+  { value: "male", label: "Male" },
+  { value: "female", label: "Female" },
+  { value: "prefer_not_to_say", label: "Prefer not to say" }
+] as const;
+
+export type UserGender = (typeof genderOptions)[number]["value"];
+
+/** Type-guard for a valid self-declared gender. */
+export function isUserGender(value: unknown): value is UserGender {
+  return typeof value === "string" && genderOptions.some((option) => option.value === value);
+}
+
+/**
+ * A logged-in user's matching/UI preferences. UI language and matching language
+ * are kept as *separate* fields (story 27) so interface localization and match
+ * preference can evolve independently; both are seeded from the browser language
+ * during onboarding. `gender` is null until the user declares it (story 29).
+ * Part of the API↔web contract — returned in the user summary.
+ */
+export interface UserPreferences {
+  /** Interface localization language; distinct from {@link matchingLanguage}. */
+  uiLanguage: LanguageCode;
+  /** Language used as a matching signal (story 28). */
+  matchingLanguage: LanguageCode;
+  /** Self-declared gender, or null until set (story 29). */
+  gender: UserGender | null;
+}
+
+/**
+ * Whether the logged-in user still owes the lightweight onboarding step — i.e.
+ * they have not yet declared a matching language and gender (story 28-29). The
+ * API is authoritative; the web app uses this to decide whether to show the
+ * onboarding form after sign-in.
+ */
+export interface OnboardingStatus {
+  required: boolean;
+}
+
 export const featureFlagKeys = [
   "camera_media",
   "gender_filters",
