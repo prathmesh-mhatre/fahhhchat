@@ -44,6 +44,7 @@ describe("GuestSessionService", () => {
         avatar: { avatarId: expect.any(String), backgroundColor: expect.any(String) }
       },
       displayNameChange: { allowed: true, nextAllowedAt: null },
+      avatarChange: { allowed: true, nextAllowedAt: null },
       safety: {
         required: true,
         currentVersion: productConfig.safetyGuidelinesVersion,
@@ -156,6 +157,83 @@ describe("GuestSessionService", () => {
 
     it("requires an accepted session", async () => {
       await expect(service.changeDisplayName(undefined, "Brave Otter")).rejects.toThrow();
+    });
+  });
+
+  describe("avatar change (stories 19-21)", () => {
+    async function newSession() {
+      const { token } = await service.accept({
+        ageConfirmed: true,
+        legalVersion: productConfig.legalVersion
+      });
+      return token;
+    }
+
+    it("swaps the avatar from the built-in set and starts the cooldown", async () => {
+      const token = await newSession();
+
+      const summary = await service.changeAvatar(token, "fox", "#EC4899");
+      expect(summary.identity.avatar).toEqual({ avatarId: "fox", backgroundColor: "#EC4899" });
+      expect(summary.avatarChange.allowed).toBe(false);
+      expect(summary.avatarChange.nextAllowedAt).toEqual(expect.any(String));
+
+      // Persisted for the session.
+      const resolved = await service.getSession(token);
+      expect(resolved!.identity.avatar).toEqual({ avatarId: "fox", backgroundColor: "#EC4899" });
+    });
+
+    it("leaves the display name untouched when changing the avatar", async () => {
+      const token = await newSession();
+      const before = (await service.getSession(token))!.identity.displayName;
+      const after = (await service.changeAvatar(token, "owl", "#10B981")).identity.displayName;
+      expect(after).toBe(before);
+    });
+
+    it("rejects an avatar id outside the built-in set without consuming the cooldown", async () => {
+      const token = await newSession();
+      await expect(service.changeAvatar(token, "dragon", "#10B981")).rejects.toBeInstanceOf(
+        BadRequestException
+      );
+      const status = (await service.getSession(token))!.avatarChange;
+      expect(status.allowed).toBe(true);
+    });
+
+    it("rejects a background outside the palette", async () => {
+      const token = await newSession();
+      await expect(service.changeAvatar(token, "fox", "#000000")).rejects.toBeInstanceOf(
+        BadRequestException
+      );
+    });
+
+    it("enforces once-per-day independently of the name cooldown", async () => {
+      const token = await newSession();
+      await service.changeAvatar(token, "panda", "#3B82F6");
+      await expect(service.changeAvatar(token, "cat", "#8B5CF6")).rejects.toBeInstanceOf(
+        ConflictException
+      );
+
+      // A rename is still allowed — the two cooldowns are tracked separately.
+      const renamed = await service.changeDisplayName(token, "Quiet Harbor");
+      expect(renamed.identity.displayName).toBe("Quiet Harbor");
+    });
+
+    it("allows another change once the cooldown window has elapsed", async () => {
+      const token = await newSession();
+      const sessionId = service.verify(token)!;
+      await service.changeAvatar(token, "koala", "#F59E0B");
+
+      const record = (await store.get(sessionId))!;
+      record.avatarUpdatedAt = new Date(
+        Date.now() - (productConfig.avatarChangeCooldownHours + 1) * 3600_000
+      ).toISOString();
+      await store.save(record);
+
+      const summary = await service.changeAvatar(token, "penguin", "#06B6D4");
+      expect(summary.identity.avatar).toEqual({ avatarId: "penguin", backgroundColor: "#06B6D4" });
+    });
+
+    it("requires an accepted session", async () => {
+      await expect(service.changeAvatar(undefined, "fox", "#EC4899")).rejects.toThrow();
     });
   });
 

@@ -187,6 +187,61 @@ describe("AuthService", () => {
     });
   });
 
+  describe("avatar change (stories 19-21)", () => {
+    it("swaps the avatar, persists across logins, and starts the cooldown (stories 19, 22)", async () => {
+      const { token } = await service.loginWithGoogle(aliceToken);
+
+      const summary = await service.changeAvatar(token, "owl", "#10B981");
+      expect(summary.identity.avatar).toEqual({ avatarId: "owl", backgroundColor: "#10B981" });
+      expect(summary.avatarChange.allowed).toBe(false);
+
+      // The new avatar persists with the account across a fresh login.
+      const relogin = await service.loginWithGoogle(aliceToken);
+      expect(relogin.summary.identity.avatar).toEqual({ avatarId: "owl", backgroundColor: "#10B981" });
+      expect(relogin.summary.avatarChange.allowed).toBe(false);
+    });
+
+    it("validates the selection against the built-in set without consuming the cooldown", async () => {
+      const { token } = await service.loginWithGoogle(aliceToken);
+      await expect(service.changeAvatar(token, "dragon", "#10B981")).rejects.toBeInstanceOf(
+        BadRequestException
+      );
+      expect((await service.getUser(token))!.avatarChange.allowed).toBe(true);
+    });
+
+    it("enforces once-per-day and allows again after the window elapses", async () => {
+      const { token, summary } = await service.loginWithGoogle(aliceToken);
+      await service.changeAvatar(token, "cat", "#3B82F6");
+      await expect(service.changeAvatar(token, "frog", "#8B5CF6")).rejects.toBeInstanceOf(
+        ConflictException
+      );
+
+      const record = (await store.get(summary.userId))!;
+      record.avatarUpdatedAt = new Date(
+        Date.now() - (productConfig.avatarChangeCooldownHours + 1) * 3600_000
+      ).toISOString();
+      await store.save(record);
+
+      const after = await service.changeAvatar(token, "frog", "#8B5CF6");
+      expect(after.identity.avatar).toEqual({ avatarId: "frog", backgroundColor: "#8B5CF6" });
+    });
+
+    it("tracks the avatar cooldown independently of the name cooldown", async () => {
+      const { token } = await service.loginWithGoogle(aliceToken);
+      await service.changeDisplayName(token, "Velvet Sparrow");
+      // Renaming consumed the name allowance but not the avatar one.
+      const summary = await service.changeAvatar(token, "turtle", "#06B6D4");
+      expect(summary.identity.displayName).toBe("Velvet Sparrow");
+      expect(summary.identity.avatar).toEqual({ avatarId: "turtle", backgroundColor: "#06B6D4" });
+    });
+
+    it("requires a session", async () => {
+      await expect(service.changeAvatar(undefined, "fox", "#EC4899")).rejects.toBeInstanceOf(
+        UnauthorizedException
+      );
+    });
+  });
+
   it("returns null and rejects for missing or tampered app tokens", async () => {
     const { token } = await service.loginWithGoogle(aliceToken);
 

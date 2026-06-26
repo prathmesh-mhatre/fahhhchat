@@ -1,4 +1,4 @@
-import type { DisplayIdentity, DisplayNameChangeStatus } from "@fahhhchat/config";
+import type { AvatarChangeStatus, DisplayIdentity, DisplayNameChangeStatus } from "@fahhhchat/config";
 
 export interface GuestSessionRecord {
   sessionId: string;
@@ -16,6 +16,12 @@ export interface GuestSessionRecord {
    * the name is still the generated default. Drives the once-per-day cooldown.
    */
   displayNameUpdatedAt?: string;
+  /**
+   * When the user last *changed* their avatar (story 19). Undefined while the
+   * avatar is still the generated default. Drives the once-per-day avatar
+   * cooldown, tracked separately from {@link displayNameUpdatedAt}.
+   */
+  avatarUpdatedAt?: string;
   /** Safety guidelines version the user last accepted, or undefined if never. */
   safetyGuidelinesVersion?: string;
   safetyGuidelinesAcceptedAt?: string;
@@ -46,6 +52,8 @@ export interface GuestSessionSummary {
   identity: DisplayIdentity;
   /** Whether the once-per-day display-name change is available (story 16). */
   displayNameChange: DisplayNameChangeStatus;
+  /** Whether the once-per-day avatar change is available (story 19). */
+  avatarChange: AvatarChangeStatus;
   safety: SafetyGuidelinesStatus;
 }
 

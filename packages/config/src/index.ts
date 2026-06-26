@@ -19,7 +19,13 @@ export const productConfig = {
   displayNameMinLength: 3,
   displayNameMaxLength: 24,
   /** Minimum hours between display-name changes — "once per day" (story 16). */
-  displayNameChangeCooldownHours: 24
+  displayNameChangeCooldownHours: 24,
+  /**
+   * Minimum hours between avatar changes — "once per day" (story 19). Tracked
+   * independently of the display-name cooldown so a rename and an avatar swap
+   * don't consume each other's daily allowance.
+   */
+  avatarChangeCooldownHours: 24
 } as const;
 
 /**
@@ -29,6 +35,19 @@ export const productConfig = {
  * because it is part of the API↔web contract.
  */
 export interface DisplayNameChangeStatus {
+  /** True when a change is allowed now (no active once-per-day cooldown). */
+  allowed: boolean;
+  /** ISO timestamp when the next change is allowed, or null if allowed now. */
+  nextAllowedAt: string | null;
+}
+
+/**
+ * Whether the user may change their avatar right now, surfaced in the
+ * guest/user summaries so the picker can disable itself and explain the wait
+ * (story 19). Mirrors {@link DisplayNameChangeStatus}: the API is authoritative
+ * and this is advisory state for the UI. Part of the API↔web contract.
+ */
+export interface AvatarChangeStatus {
   /** True when a change is allowed now (no active once-per-day cooldown). */
   allowed: boolean;
   /** ISO timestamp when the next change is allowed, or null if allowed now. */
@@ -116,4 +135,27 @@ export const avatarBackgrounds = [
 /** Resolve an avatar id to its renderable glyph, or undefined if unknown. */
 export function avatarGlyph(avatarId: string): string | undefined {
   return avatarSet.find((avatar) => avatar.id === avatarId)?.glyph;
+}
+
+/**
+ * Validate a proposed avatar selection against the built-in/generated set,
+ * returning a normalized {@link AvatarDescriptor} or null if either the avatar
+ * id or background is not part of the safe set (story 19). Because avatars are
+ * limited to this curated set — no uploads in MVP (story 20) — selection needs
+ * only set-membership validation, not moderation. Shared by the guest and
+ * logged-in services so both enforce the identical allow-list.
+ */
+export function resolveAvatarSelection(
+  avatarId: unknown,
+  backgroundColor: unknown
+): AvatarDescriptor | null {
+  if (
+    typeof avatarId === "string" &&
+    typeof backgroundColor === "string" &&
+    avatarSet.some((avatar) => avatar.id === avatarId) &&
+    (avatarBackgrounds as readonly string[]).includes(backgroundColor)
+  ) {
+    return { avatarId, backgroundColor };
+  }
+  return null;
 }

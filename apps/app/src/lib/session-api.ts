@@ -1,4 +1,4 @@
-import type { DisplayIdentity, DisplayNameChangeStatus } from "@fahhhchat/config";
+import type { AvatarChangeStatus, DisplayIdentity, DisplayNameChangeStatus } from "@fahhhchat/config";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -19,6 +19,8 @@ export interface GuestAcceptance {
   identity: DisplayIdentity;
   /** Whether the once-per-day display-name change is currently available. */
   displayNameChange: DisplayNameChangeStatus;
+  /** Whether the once-per-day avatar change is currently available. */
+  avatarChange: AvatarChangeStatus;
   safety: SafetyGuidelinesStatus;
 }
 
@@ -63,6 +65,30 @@ export async function changeGuestDisplayName(displayName: string): Promise<Guest
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { message?: string };
     throw new Error(body.message ?? "Could not update your name. Please try again.");
+  }
+
+  return (await res.json()) as GuestAcceptance;
+}
+
+/**
+ * Changes the guest session's avatar to an entry from the built-in set. The
+ * server validates the selection and enforces the once-per-day limit, surfacing
+ * a human-readable error otherwise.
+ */
+export async function changeGuestAvatar(
+  avatarId: string,
+  backgroundColor: string
+): Promise<GuestAcceptance> {
+  const res = await fetch(`${API_URL}/session/avatar`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ avatarId, backgroundColor })
+  });
+
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { message?: string };
+    throw new Error(body.message ?? "Could not update your avatar. Please try again.");
   }
 
   return (await res.json()) as GuestAcceptance;

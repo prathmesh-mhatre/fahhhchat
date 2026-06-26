@@ -100,6 +100,42 @@ describe("Auth (e2e)", () => {
       .expect(409);
   });
 
+  it("changes the avatar from the built-in set, persists it, and enforces the cooldown (stories 19-21)", async () => {
+    const cookie = (await login().expect(200)).headers["set-cookie"];
+
+    // An avatar outside the built-in set is rejected with 400.
+    await request(app.getHttpServer())
+      .post("/auth/avatar")
+      .set("Cookie", cookie)
+      .send({ avatarId: "dragon", backgroundColor: "#10B981" })
+      .expect(400);
+
+    const changed = await request(app.getHttpServer())
+      .post("/auth/avatar")
+      .set("Cookie", cookie)
+      .send({ avatarId: "owl", backgroundColor: "#10B981" })
+      .expect(200);
+    expect(changed.body.identity.avatar).toEqual({ avatarId: "owl", backgroundColor: "#10B981" });
+
+    // Persisted on /auth/me.
+    const me = await request(app.getHttpServer()).get("/auth/me").set("Cookie", cookie).expect(200);
+    expect(me.body.identity.avatar).toEqual({ avatarId: "owl", backgroundColor: "#10B981" });
+
+    // Second change within the day blocked (409).
+    await request(app.getHttpServer())
+      .post("/auth/avatar")
+      .set("Cookie", cookie)
+      .send({ avatarId: "cat", backgroundColor: "#3B82F6" })
+      .expect(409);
+  });
+
+  it("rejects an avatar change without a session (guard enforced)", async () => {
+    await request(app.getHttpServer())
+      .post("/auth/avatar")
+      .send({ avatarId: "fox", backgroundColor: "#EC4899" })
+      .expect(401);
+  });
+
   it("rejects a username change without a session (guard enforced)", async () => {
     await request(app.getHttpServer())
       .post("/auth/username")
