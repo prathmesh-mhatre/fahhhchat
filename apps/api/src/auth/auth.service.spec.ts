@@ -242,6 +242,71 @@ describe("AuthService", () => {
     });
   });
 
+  describe("language + gender onboarding (stories 27-29)", () => {
+    it("starts onboarding required with default preferences and no declared gender", async () => {
+      const { summary } = await service.loginWithGoogle(aliceToken);
+      expect(summary.onboarding.required).toBe(true);
+      expect(summary.preferences).toEqual({
+        uiLanguage: "en",
+        matchingLanguage: "en",
+        gender: null
+      });
+    });
+
+    it("saves matching language and gender, completing onboarding (stories 28-29)", async () => {
+      const { token } = await service.loginWithGoogle(aliceToken);
+
+      const summary = await service.setPreferences(token, "es", "female", undefined);
+      expect(summary.onboarding.required).toBe(false);
+      expect(summary.preferences.matchingLanguage).toBe("es");
+      expect(summary.preferences.gender).toBe("female");
+      // UI language defaults to the matching language when not supplied.
+      expect(summary.preferences.uiLanguage).toBe("es");
+    });
+
+    it("keeps UI language and matching language as separate preferences (story 27)", async () => {
+      const { token } = await service.loginWithGoogle(aliceToken);
+
+      const summary = await service.setPreferences(token, "pt", "male", "en");
+      expect(summary.preferences.matchingLanguage).toBe("pt");
+      expect(summary.preferences.uiLanguage).toBe("en");
+    });
+
+    it("persists preferences across logins (story 22)", async () => {
+      const { token } = await service.loginWithGoogle(aliceToken);
+      await service.setPreferences(token, "fr", "prefer_not_to_say", "de");
+
+      const relogin = await service.loginWithGoogle(aliceToken);
+      expect(relogin.summary.onboarding.required).toBe(false);
+      expect(relogin.summary.preferences).toEqual({
+        uiLanguage: "de",
+        matchingLanguage: "fr",
+        gender: "prefer_not_to_say"
+      });
+    });
+
+    it("rejects unsupported languages and invalid genders", async () => {
+      const { token } = await service.loginWithGoogle(aliceToken);
+      await expect(service.setPreferences(token, "klingon", "male", undefined)).rejects.toBeInstanceOf(
+        BadRequestException
+      );
+      await expect(service.setPreferences(token, "en", "other", undefined)).rejects.toBeInstanceOf(
+        BadRequestException
+      );
+      await expect(service.setPreferences(token, "en", "male", "klingon")).rejects.toBeInstanceOf(
+        BadRequestException
+      );
+      // None of the rejected attempts completed onboarding.
+      expect((await service.getUser(token))!.onboarding.required).toBe(true);
+    });
+
+    it("requires a session", async () => {
+      await expect(service.setPreferences(undefined, "en", "male", undefined)).rejects.toBeInstanceOf(
+        UnauthorizedException
+      );
+    });
+  });
+
   it("returns null and rejects for missing or tampered app tokens", async () => {
     const { token } = await service.loginWithGoogle(aliceToken);
 

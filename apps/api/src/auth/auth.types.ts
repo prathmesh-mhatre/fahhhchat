@@ -37,6 +37,22 @@ export interface UserRecord {
    * cooldown and persists with the account, independent of the name cooldown.
    */
   avatarUpdatedAt?: string;
+  /**
+   * Interface localization language (story 27). Kept separate from
+   * {@link matchingLanguage} so UI and match preference can diverge. Undefined
+   * until onboarding seeds it from the browser language.
+   */
+  uiLanguage?: LanguageCode;
+  /**
+   * Language used as a matching signal (story 28). Undefined until the user
+   * completes onboarding; its presence (with {@link gender}) marks onboarding
+   * done.
+   */
+  matchingLanguage?: LanguageCode;
+  /** Self-declared gender for gender filters (story 29); undefined until set. */
+  gender?: UserGender;
+  /** When the user last saved language/gender preferences. */
+  preferencesUpdatedAt?: string;
   /** Persisted legal/age acceptance for the account (story 22). */
   legalVersion?: string;
   ageConfirmed?: boolean;
@@ -48,7 +64,15 @@ export interface UserRecord {
   safetyRepromptRequired?: boolean;
 }
 
-import type { AvatarChangeStatus, DisplayIdentity, DisplayNameChangeStatus } from "@fahhhchat/config";
+import type {
+  AvatarChangeStatus,
+  DisplayIdentity,
+  DisplayNameChangeStatus,
+  LanguageCode,
+  OnboardingStatus,
+  UserGender,
+  UserPreferences
+} from "@fahhhchat/config";
 import type { SafetyGuidelinesStatus } from "../session/session.types";
 
 /** Whether the logged-in user still owes legal/age acceptance. */
@@ -72,6 +96,10 @@ export interface UserSummary {
   displayNameChange: DisplayNameChangeStatus;
   /** Whether the once-per-day avatar change is available (story 19). */
   avatarChange: AvatarChangeStatus;
+  /** Matching/UI language and gender preferences (stories 27-29). */
+  preferences: UserPreferences;
+  /** Whether lightweight onboarding (language + gender) is still owed. */
+  onboarding: OnboardingStatus;
   legal: LegalAcceptanceStatus;
   safety: SafetyGuidelinesStatus;
 }

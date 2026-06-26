@@ -129,6 +129,51 @@ describe("Auth (e2e)", () => {
       .expect(409);
   });
 
+  it("saves language + gender onboarding, persists it, and validates input (stories 27-29)", async () => {
+    const cookie = (await login().expect(200)).headers["set-cookie"];
+
+    // A fresh account owes onboarding with default preferences.
+    const before = await request(app.getHttpServer()).get("/auth/me").set("Cookie", cookie).expect(200);
+    expect(before.body.onboarding.required).toBe(true);
+    expect(before.body.preferences).toEqual({ uiLanguage: "en", matchingLanguage: "en", gender: null });
+
+    // Invalid submissions are rejected with 400.
+    await request(app.getHttpServer())
+      .post("/auth/preferences")
+      .set("Cookie", cookie)
+      .send({ matchingLanguage: "klingon", gender: "male" })
+      .expect(400);
+    await request(app.getHttpServer())
+      .post("/auth/preferences")
+      .set("Cookie", cookie)
+      .send({ matchingLanguage: "en", gender: "other" })
+      .expect(400);
+
+    // Valid submission keeps UI and matching language separate (story 27).
+    const saved = await request(app.getHttpServer())
+      .post("/auth/preferences")
+      .set("Cookie", cookie)
+      .send({ matchingLanguage: "es", gender: "female", uiLanguage: "en" })
+      .expect(200);
+    expect(saved.body.onboarding.required).toBe(false);
+    expect(saved.body.preferences).toEqual({
+      uiLanguage: "en",
+      matchingLanguage: "es",
+      gender: "female"
+    });
+
+    // Persisted on /auth/me.
+    const me = await request(app.getHttpServer()).get("/auth/me").set("Cookie", cookie).expect(200);
+    expect(me.body.preferences).toEqual({ uiLanguage: "en", matchingLanguage: "es", gender: "female" });
+  });
+
+  it("rejects a preferences change without a session (guard enforced)", async () => {
+    await request(app.getHttpServer())
+      .post("/auth/preferences")
+      .send({ matchingLanguage: "en", gender: "male" })
+      .expect(401);
+  });
+
   it("rejects an avatar change without a session (guard enforced)", async () => {
     await request(app.getHttpServer())
       .post("/auth/avatar")

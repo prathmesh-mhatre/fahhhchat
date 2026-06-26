@@ -333,6 +333,104 @@ p {
   line-height: 1.5;
 }
 
+.onboarding-form {
+  display: grid;
+  gap: 18px;
+  margin: 18px 0 4px;
+}
+
+.onboarding-field {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.onboarding-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fc-color-muted-text);
+}
+
+.onboarding-select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--fc-color-border);
+  border-radius: var(--fc-radius-control, 12px);
+  background: var(--fc-color-surface, #11161d);
+  color: var(--fc-color-text);
+  font: inherit;
+}
+
+.onboarding-select:focus-visible {
+  outline: 2px solid var(--fc-color-accent);
+  outline-offset: 1px;
+}
+
+.onboarding-options {
+  display: grid;
+  gap: 10px;
+}
+
+.onboarding-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.onboarding-option input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--fc-color-accent);
+  flex-shrink: 0;
+}
+
+.onboarding-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--fc-color-muted-text);
+  line-height: 1.5;
+}
+
+.prefs-card {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--fc-color-border);
+  border-radius: var(--fc-radius-control, 12px);
+  background: var(--fc-color-surface, #11161d);
+}
+
+.prefs-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.prefs-list div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.prefs-list dt {
+  color: var(--fc-color-muted-text);
+  font-size: 0.85rem;
+}
+
+.prefs-list dd {
+  margin: 0;
+  font-weight: 700;
+  color: var(--fc-color-text);
+  text-align: right;
+}
+
 .consent-banner {
   position: fixed;
   inset: auto 16px 16px;

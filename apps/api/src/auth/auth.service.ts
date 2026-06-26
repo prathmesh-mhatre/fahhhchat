@@ -1,6 +1,14 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { BadRequestException, ConflictException, Inject, Injectable, UnauthorizedException } from "@nestjs/common";
-import { productConfig, resolveAvatarSelection } from "@fahhhchat/config";
+import {
+  defaultLanguage,
+  isLanguageCode,
+  isUserGender,
+  productConfig,
+  resolveAvatarSelection,
+  type OnboardingStatus,
+  type UserPreferences
+} from "@fahhhchat/config";
 import { generateDisplayIdentity } from "../identity/display-identity";
 import { avatarChangeStatus } from "../identity/avatar-change";
 import { displayNameChangeStatus } from "../identity/display-name-change";
@@ -169,6 +177,43 @@ export class AuthService {
     return this.toSummary(record);
   }
 
+  /**
+   * Saves the account's matching language and gender, and optionally a separate
+   * UI language (stories 27-29). Used both for the initial lightweight
+   * onboarding step and for later preference edits — once matching language and
+   * gender are set, {@link OnboardingStatus.required} flips to false. UI and
+   * matching language are stored as distinct fields so they can diverge later.
+   */
+  async setPreferences(
+    token: string | undefined,
+    rawMatchingLanguage: unknown,
+    rawGender: unknown,
+    rawUiLanguage: unknown
+  ): Promise<UserSummary> {
+    const record = await this.requireRecord(token);
+
+    if (!isLanguageCode(rawMatchingLanguage)) {
+      throw new BadRequestException("Choose a matching language from the supported list.");
+    }
+    if (!isUserGender(rawGender)) {
+      throw new BadRequestException("Choose Male, Female, or Prefer not to say.");
+    }
+    // UI language is optional: it stays whatever it was (or defaults to the
+    // matching language on first onboarding) when the client omits it, but if
+    // provided it must be a supported code.
+    if (rawUiLanguage !== undefined && !isLanguageCode(rawUiLanguage)) {
+      throw new BadRequestException("Choose a UI language from the supported list.");
+    }
+
+    record.matchingLanguage = rawMatchingLanguage;
+    record.gender = rawGender;
+    record.uiLanguage =
+      rawUiLanguage !== undefined ? rawUiLanguage : (record.uiLanguage ?? rawMatchingLanguage);
+    record.preferencesUpdatedAt = new Date().toISOString();
+    await this.store.save(record);
+    return this.toSummary(record);
+  }
+
   /** Flag the account to re-show safety guidelines next visit (enforcement hook). */
   async flagSafetyReprompt(token: string | undefined): Promise<UserSummary> {
     const record = await this.requireRecord(token);
@@ -227,9 +272,24 @@ export class AuthService {
       identity: record.identity ?? generateDisplayIdentity(),
       displayNameChange: displayNameChangeStatus(record.displayNameUpdatedAt),
       avatarChange: avatarChangeStatus(record.avatarUpdatedAt),
+      preferences: this.preferences(record),
+      onboarding: this.onboardingStatus(record),
       legal: this.legalStatus(record),
       safety: this.safetyStatus(record)
     };
+  }
+
+  private preferences(record: UserRecord): UserPreferences {
+    return {
+      uiLanguage: record.uiLanguage ?? defaultLanguage,
+      matchingLanguage: record.matchingLanguage ?? defaultLanguage,
+      gender: record.gender ?? null
+    };
+  }
+
+  /** Onboarding is owed until the user has declared both language and gender. */
+  private onboardingStatus(record: UserRecord): OnboardingStatus {
+    return { required: record.matchingLanguage === undefined || record.gender === undefined };
   }
 
   private legalStatus(record: UserRecord): LegalAcceptanceStatus {

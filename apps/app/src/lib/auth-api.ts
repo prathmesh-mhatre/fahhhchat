@@ -1,4 +1,12 @@
-import type { AvatarChangeStatus, DisplayIdentity, DisplayNameChangeStatus } from "@fahhhchat/config";
+import type {
+  AvatarChangeStatus,
+  DisplayIdentity,
+  DisplayNameChangeStatus,
+  LanguageCode,
+  OnboardingStatus,
+  UserGender,
+  UserPreferences
+} from "@fahhhchat/config";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -25,6 +33,10 @@ export interface AppUser {
   displayNameChange: DisplayNameChangeStatus;
   /** Whether the once-per-day avatar change is currently available. */
   avatarChange: AvatarChangeStatus;
+  /** Matching/UI language and gender preferences (stories 27-29). */
+  preferences: UserPreferences;
+  /** Whether lightweight language + gender onboarding is still owed. */
+  onboarding: OnboardingStatus;
   legal: LegalAcceptanceStatus;
   safety: SafetyGuidelinesStatus;
 }
@@ -100,6 +112,28 @@ export async function changeUserAvatar(avatarId: string, backgroundColor: string
     credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ avatarId, backgroundColor })
+  });
+  if (!res.ok) {
+    throw new Error(await parseError(res));
+  }
+  return (await res.json()) as AppUser;
+}
+
+/**
+ * Saves the account's matching language and gender (and optional separate UI
+ * language) for onboarding or a later edit. The server validates against the
+ * supported sets and surfaces a human-readable error otherwise.
+ */
+export async function saveUserPreferences(input: {
+  matchingLanguage: LanguageCode;
+  gender: UserGender;
+  uiLanguage?: LanguageCode;
+}): Promise<AppUser> {
+  const res = await fetch(`${API_URL}/auth/preferences`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
   });
   if (!res.ok) {
     throw new Error(await parseError(res));
