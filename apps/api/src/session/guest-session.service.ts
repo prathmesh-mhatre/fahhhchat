@@ -184,6 +184,18 @@ export class GuestSessionService {
   }
 
   /**
+   * The session's generated display name by session id, or null when the session
+   * is unknown or expired. The chat layer holds the resolved session id (off the
+   * authenticated socket), not the cookie, so this looks the name up directly —
+   * giving a *server-authoritative* name for a guest's typing indicator (story
+   * 40) that the client can never spoof.
+   */
+  async getDisplayNameBySessionId(sessionId: string): Promise<string | null> {
+    const record = await this.store.get(sessionId);
+    return record?.identity.displayName ?? null;
+  }
+
+  /**
    * Resolve the guest session id for a cookie value, but only when the session
    * still exists in the store, or null otherwise. Used by the realtime slice to
    * scope a Socket.IO handshake token to a real, accepted guest session.

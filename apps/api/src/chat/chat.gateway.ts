@@ -17,6 +17,8 @@ import {
   type MatchEndedPayload,
   type SendFailedPayload,
   type SendMessagePayload,
+  type TypingIndicatorPayload,
+  type TypingPayload,
 } from "./chat.types";
 
 /**
@@ -94,6 +96,35 @@ export class ChatGateway implements OnGatewayDisconnect {
       sentAt: result.message.sentAt,
     };
     client.emit(CHAT_EVENTS.ack, ack);
+  }
+
+  /**
+   * Relay a typing toggle to the partner, stamped with the typing user's role
+   * and generated display name (story 40). An unauthenticated socket or one with
+   * no active match is silently ignored — typing is presence, not a delivery, so
+   * there is nothing to fail back to the sender. Crucially the sender is never
+   * notified of anything in return, so this stays a one-way presence hint and
+   * never a read receipt (story 41).
+   */
+  @SubscribeMessage(CHAT_EVENTS.typing)
+  async handleTyping(client: Socket, payload?: TypingPayload): Promise<void> {
+    const identity = this.identityOf(client);
+    if (!identity) {
+      return;
+    }
+
+    const result = await this.chat.typing(identity, payload?.isTyping === true);
+    if (result.status !== "relay") {
+      return;
+    }
+
+    const indicator: TypingIndicatorPayload = {
+      matchId: result.matchId,
+      from: result.from,
+      displayName: result.displayName,
+      isTyping: result.isTyping,
+    };
+    this.server.to(result.recipientSocketId).emit(CHAT_EVENTS.typing, indicator);
   }
 
   /**

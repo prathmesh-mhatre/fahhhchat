@@ -10,8 +10,18 @@ function activeMatch(
     matchId,
     createdAt: new Date().toISOString(),
     participants: [
-      { identityKey: a.key, role: "initiator", socketId: a.socketId },
-      { identityKey: b.key, role: "responder", socketId: b.socketId },
+      {
+        identityKey: a.key,
+        role: "initiator",
+        socketId: a.socketId,
+        displayName: "Mellow Otter",
+      },
+      {
+        identityKey: b.key,
+        role: "responder",
+        socketId: b.socketId,
+        displayName: "Cosmic Sparrow",
+      },
     ],
   };
 }

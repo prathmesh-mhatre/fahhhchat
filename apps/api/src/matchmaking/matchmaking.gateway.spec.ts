@@ -70,7 +70,13 @@ function buildGateway(disabled: Array<"queue_entry" | "gender_filters"> = []) {
   const auth = new AuthService(store, new DevMockTokenVerifier(), flags);
   // The gateway registers each new pair with the chat layer; a real ChatService
   // over an in-memory store lets the test assert the active match was created.
-  const chat = new ChatService(new InMemoryChatStore());
+  // A trivial resolver stands in for the auth/session name lookup the chat layer
+  // does at registration (typing indicators) — match routing here is name-agnostic.
+  const chat = new ChatService(new InMemoryChatStore(), {
+    async resolve() {
+      return "Stranger";
+    },
+  });
   const gateway = new MatchmakingGateway(service, auth, chat);
   const { server, delivered } = fakeServer();
   (gateway as unknown as { server: Server }).server = server;

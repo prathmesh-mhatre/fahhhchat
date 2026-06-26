@@ -11,6 +11,7 @@ import {
   type ChatMessagePayload,
   type MatchEndedPayload,
   type SendFailedPayload,
+  type TypingIndicatorPayload,
 } from "../src/chat/chat.types";
 import { MATCHMAKING_EVENTS } from "../src/matchmaking/matchmaking.types";
 import { AppModule } from "../src/modules/app.module";
@@ -49,7 +50,12 @@ describe("Realtime text chat (e2e)", () => {
     await app.close();
   });
 
-  async function guestToken(): Promise<string> {
+  /**
+   * Accept a fresh guest session and mint its realtime token, returning both the
+   * token and the server-generated display name so a typing test can assert the
+   * exact name the stranger sees (story 40).
+   */
+  async function guest(): Promise<{ token: string; displayName: string }> {
     const accept = await request(app.getHttpServer())
       .post("/session/guest/accept")
       .send({ ageConfirmed: true, legalVersion: productConfig.legalVersion })
@@ -58,7 +64,10 @@ describe("Realtime text chat (e2e)", () => {
       .post("/realtime/token")
       .set("Cookie", accept.headers["set-cookie"])
       .expect(200);
-    return res.body.token as string;
+    return {
+      token: res.body.token as string,
+      displayName: accept.body.identity.displayName as string,
+    };
   }
 
   function connect(token: string): Promise<Socket> {
@@ -77,18 +86,21 @@ describe("Realtime text chat (e2e)", () => {
   }
 
   /** Connect two guests and queue them until they are paired into one match. */
-  async function pair(): Promise<{ a: Socket; b: Socket }> {
-    const [a, b] = await Promise.all([
-      connect(await guestToken()),
-      connect(await guestToken()),
-    ]);
+  async function pair(): Promise<{
+    a: Socket;
+    b: Socket;
+    aName: string;
+    bName: string;
+  }> {
+    const [ga, gb] = await Promise.all([guest(), guest()]);
+    const [a, b] = await Promise.all([connect(ga.token), connect(gb.token)]);
     const aMatched = once(a, MATCHMAKING_EVENTS.matchFound);
     const bMatched = once(b, MATCHMAKING_EVENTS.matchFound);
     a.emit(MATCHMAKING_EVENTS.join);
     await once(a, MATCHMAKING_EVENTS.waiting);
     b.emit(MATCHMAKING_EVENTS.join);
     await Promise.all([aMatched, bMatched]);
-    return { a, b };
+    return { a, b, aName: ga.displayName, bName: gb.displayName };
   }
 
   it("delivers a message to the partner and acknowledges the sender (story 39)", async () => {
@@ -107,6 +119,27 @@ describe("Realtime text chat (e2e)", () => {
     // sender's own correlation id so it can clear the pending bubble.
     expect(ack.clientMessageId).toBe("c-1");
     expect(ack.messageId).toBe(message.messageId);
+
+    a.close();
+    b.close();
+  });
+
+  it("relays a typing indicator to the partner with the typist's generated name (story 40)", async () => {
+    const { a, b, aName } = await pair();
+
+    // a starts typing → b is told, with a's server-generated display name.
+    const typing = once<TypingIndicatorPayload>(b, CHAT_EVENTS.typing);
+    a.emit(CHAT_EVENTS.typing, { isTyping: true });
+    const start = await typing;
+    expect(start.displayName).toBe(aName);
+    expect(start.isTyping).toBe(true);
+
+    // a stops typing → the same channel carries the stop toggle.
+    const stopped = once<TypingIndicatorPayload>(b, CHAT_EVENTS.typing);
+    a.emit(CHAT_EVENTS.typing, { isTyping: false });
+    const stop = await stopped;
+    expect(stop.displayName).toBe(aName);
+    expect(stop.isTyping).toBe(false);
 
     a.close();
     b.close();
