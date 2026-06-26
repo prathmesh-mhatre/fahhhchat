@@ -206,6 +206,34 @@ export const featureFlagKeys = [
 export type FeatureFlagKey = (typeof featureFlagKeys)[number];
 
 /**
+ * Enabled/disabled state for every launch kill switch (story 84), keyed by
+ * {@link FeatureFlagKey}. The API owns the durable, cached source of truth and
+ * returns this shape so the web apps can hide or lock a surface the operator has
+ * killed (e.g. drop the camera affordance when `camera_media` is off). Part of
+ * the API↔web contract, so it lives here rather than being duplicated.
+ */
+export type FeatureFlagState = Record<FeatureFlagKey, boolean>;
+
+/**
+ * Default state: every surface is on. Flags are *kill switches* — they exist to
+ * turn a risky surface off quickly (stories 80, 84), so the safe default is
+ * enabled and a stored override only ever flips one off. The API merges any
+ * durable overrides over these defaults, which also means a newly added flag is
+ * live until an operator explicitly disables it.
+ */
+export const defaultFeatureFlags: FeatureFlagState = {
+  camera_media: true,
+  gender_filters: true,
+  guest_access: true,
+  queue_entry: true
+};
+
+/** Type-guard for a known feature flag key. */
+export function isFeatureFlagKey(value: unknown): value is FeatureFlagKey {
+  return typeof value === "string" && (featureFlagKeys as readonly string[]).includes(value);
+}
+
+/**
  * Generated display identity assigned to every user (guest or logged-in). The
  * PRD models identity around an internal id and never the public Google
  * identity, so all users — including logged-in ones — are shown to matched

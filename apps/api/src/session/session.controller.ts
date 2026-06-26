@@ -10,6 +10,7 @@ import {
   UseGuards
 } from "@nestjs/common";
 import type { Request, Response } from "express";
+import { FeatureFlagGuard, RequireFeatureFlag } from "../feature-flags/require-feature-flag.guard";
 import { GuestSessionService } from "./guest-session.service";
 import { GuestGuard } from "./guest.guard";
 import type { RequestWithGuestSession } from "./guest.guard";
@@ -124,10 +125,13 @@ export class SessionController {
   /**
    * Placeholder protected route proving the gate is enforced server-side. The
    * matchmaking slice replaces this with real queue entry behind the same guards.
-   * Requires both the legal gate and the current safety guidelines.
+   * Requires both the legal gate and the current safety guidelines, and is gated
+   * by the `queue_entry` kill switch (story 84) so an operator can close the
+   * queue without taking the service down.
    */
   @Get("queue-eligibility")
-  @UseGuards(GuestGuard, SafetyGuidelinesGuard)
+  @RequireFeatureFlag("queue_entry")
+  @UseGuards(GuestGuard, SafetyGuidelinesGuard, FeatureFlagGuard)
   queueEligibility(@Req() req: RequestWithGuestSession) {
     return { eligible: true, legalVersion: req.guestSession?.legalVersion };
   }

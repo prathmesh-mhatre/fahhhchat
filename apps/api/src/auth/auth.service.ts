@@ -15,6 +15,7 @@ import { generateDisplayIdentity } from "../identity/display-identity";
 import { avatarChangeStatus } from "../identity/avatar-change";
 import { displayNameChangeStatus } from "../identity/display-name-change";
 import { moderateDisplayName } from "../identity/username-moderation";
+import { FeatureFlagsService } from "../feature-flags/feature-flags.service";
 import type { SafetyGuidelinesStatus } from "../session/session.types";
 import {
   GOOGLE_TOKEN_VERIFIER,
@@ -44,7 +45,8 @@ export class AuthService {
 
   constructor(
     @Inject(USER_STORE) private readonly store: UserStore,
-    @Inject(GOOGLE_TOKEN_VERIFIER) private readonly googleVerifier: GoogleTokenVerifier
+    @Inject(GOOGLE_TOKEN_VERIFIER) private readonly googleVerifier: GoogleTokenVerifier,
+    private readonly flags: FeatureFlagsService
   ) {
     const secret = process.env.AUTH_SECRET;
     if (!secret) {
@@ -213,6 +215,15 @@ export class AuthService {
     // default) when omitted, but if provided it must be a valid choice.
     if (rawGenderFilter !== undefined && !isGenderFilter(rawGenderFilter)) {
       throw new BadRequestException("Choose a gender filter of Male, Female, or Both.");
+    }
+    // Gender filtering is a launch kill switch (story 84). When it is off, a user
+    // may still clear their filter (set "both") but cannot apply a *narrowing*
+    // one, so matching can ignore the preference entirely while it is disabled.
+    if (rawGenderFilter !== undefined && rawGenderFilter !== "both") {
+      await this.flags.assertEnabled(
+        "gender_filters",
+        "Gender filtering is temporarily unavailable. You can still match without a filter."
+      );
     }
 
     record.matchingLanguage = rawMatchingLanguage;

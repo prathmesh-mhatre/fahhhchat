@@ -1,7 +1,14 @@
-import { BadRequestException, ConflictException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ServiceUnavailableException } from "@nestjs/common";
 import { productConfig } from "@fahhhchat/config";
 import { GuestSessionService } from "./guest-session.service";
 import { InMemorySessionStore } from "./in-memory-session.store";
+import { FeatureFlagsService } from "../feature-flags/feature-flags.service";
+import { InMemoryFeatureFlagStore } from "../feature-flags/in-memory-feature-flag.store";
+
+/** A feature-flags service with all kill switches at their default (enabled). */
+function enabledFlags(): FeatureFlagsService {
+  return new FeatureFlagsService(new InMemoryFeatureFlagStore());
+}
 
 describe("GuestSessionService", () => {
   let store: InMemorySessionStore;
@@ -13,13 +20,23 @@ describe("GuestSessionService", () => {
 
   beforeEach(() => {
     store = new InMemorySessionStore();
-    service = new GuestSessionService(store);
+    service = new GuestSessionService(store, enabledFlags());
   });
 
   it("rejects acceptance when 18+ is not confirmed", async () => {
     await expect(
       service.accept({ ageConfirmed: false, legalVersion: productConfig.legalVersion })
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("rejects guest acceptance when the guest_access kill switch is off (story 84)", async () => {
+    const killed = new GuestSessionService(
+      store,
+      new FeatureFlagsService(new InMemoryFeatureFlagStore(["guest_access"]))
+    );
+    await expect(
+      killed.accept({ ageConfirmed: true, legalVersion: productConfig.legalVersion })
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
   });
 
   it("rejects acceptance for a stale legal version", async () => {
@@ -84,7 +101,7 @@ describe("GuestSessionService", () => {
 
   it("returns null when the signed session is unknown to the store", async () => {
     // A correctly signed token whose record was never saved (e.g. expired/evicted).
-    const orphan = new GuestSessionService(new InMemorySessionStore());
+    const orphan = new GuestSessionService(new InMemorySessionStore(), enabledFlags());
     const { token } = await orphan.accept({
       ageConfirmed: true,
       legalVersion: productConfig.legalVersion
