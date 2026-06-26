@@ -17,6 +17,7 @@ import {
   type JoinPreferences,
   type Match,
   type MatchFoundPayload,
+  type RateLimitedPayload,
 } from "./matchmaking.types";
 
 /**
@@ -65,6 +66,16 @@ export class MatchmakingGateway implements OnGatewayDisconnect {
     const language = resolveLanguage(payload?.language);
     const prefs = await this.resolvePreferences(identity, language);
     const result = await this.matchmaking.join(identity, client.id, prefs);
+    if (result.status === "rate_limited") {
+      // Throttled (stories 142-144): tell the client how long to wait rather
+      // than appearing to hang. Distinct from the generic error so the web app
+      // can show a "slow down" hint and disable Join for the cooldown.
+      const payload: RateLimitedPayload = {
+        retryAfterSeconds: result.retryAfterSeconds,
+      };
+      client.emit(MATCHMAKING_EVENTS.rateLimited, payload);
+      return;
+    }
     if (result.status === "unavailable") {
       client.emit(MATCHMAKING_EVENTS.error, {
         message: "Matching is temporarily unavailable. Please try again later.",

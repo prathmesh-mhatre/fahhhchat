@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
+import { RateLimitModule } from "../rate-limit/rate-limit.module";
 import { SessionModule } from "../session/session.module";
 import { RealtimeController } from "./realtime.controller";
 import { RealtimeGateway } from "./realtime.gateway";
@@ -9,10 +10,12 @@ import { RealtimeTokenService } from "./realtime-token.service";
  * Realtime access control: the token endpoint and the Socket.IO gateway that
  * authenticate guests and logged-in users for realtime. Reuses {@link AuthModule}
  * and {@link SessionModule} to resolve the caller's cookie identity, keeping the
- * single source of truth for what a valid guest/user is.
+ * single source of truth for what a valid guest/user is, and {@link
+ * RateLimitModule} to throttle reconnect/token attempts per identity (stories
+ * 142-144, issue #20).
  */
 @Module({
-  imports: [AuthModule, SessionModule],
+  imports: [AuthModule, SessionModule, RateLimitModule],
   controllers: [RealtimeController],
   providers: [RealtimeTokenService, RealtimeGateway],
   exports: [RealtimeTokenService],

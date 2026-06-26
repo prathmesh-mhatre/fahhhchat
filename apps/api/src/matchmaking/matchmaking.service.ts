@@ -6,6 +6,7 @@ import {
   productConfig,
 } from "@fahhhchat/config";
 import { FeatureFlagsService } from "../feature-flags/feature-flags.service";
+import { RateLimitService } from "../rate-limit/rate-limit.service";
 import type { RealtimeIdentity } from "../realtime/realtime.types";
 import {
   MATCHMAKING_QUEUE,
@@ -49,17 +50,26 @@ export class MatchmakingService {
   private totalGenderRelaxedMatches = 0;
   private totalLeaves = 0;
   private totalRejectedUnavailable = 0;
+  private totalRateLimited = 0;
 
   constructor(
     @Inject(MATCHMAKING_QUEUE) private readonly queue: MatchmakingQueue,
-    private readonly flags: FeatureFlagsService
+    private readonly flags: FeatureFlagsService,
+    private readonly rateLimits: RateLimitService
   ) {}
 
   /**
    * Join the shared pool. Returns `matched` with a {@link Match} when a partner
-   * was waiting, `queued` when the user is now waiting for one, or `unavailable`
-   * when the `queue_entry` kill switch is off. Joining while already queued is
-   * idempotent: the user keeps a single slot (refreshed onto the latest socket).
+   * was waiting, `queued` when the user is now waiting for one, `unavailable`
+   * when the `queue_entry` kill switch is off, or `rate_limited` when the joiner
+   * has exceeded their queue-join threshold (stories 142-144). Joining while
+   * already queued is idempotent: the user keeps a single slot (refreshed onto
+   * the latest socket).
+   *
+   * The rate-limit check runs *first*, before the kill switch, so a bot hammering
+   * join is throttled even while the queue is closed — every attempt is counted,
+   * which is exactly the overload the limit exists to contain (story 144). The
+   * threshold is stricter for guests than logged-in users (stories 142-143).
    *
    * `prefs` are the joiner's soft matching signals — language (story 36) plus
    * declared gender and gender filter (stories 31-33). They only steer *who* you
@@ -75,6 +85,15 @@ export class MatchmakingService {
     prefs: JoinPreferences = {},
     now: Date = new Date()
   ): Promise<JoinResult> {
+    const decision = await this.rateLimits.consume("queue_join", identity, now);
+    if (!decision.allowed) {
+      this.totalRateLimited += 1;
+      return {
+        status: "rate_limited",
+        retryAfterSeconds: decision.retryAfterSeconds,
+      };
+    }
+
     if (!(await this.flags.isEnabled("queue_entry"))) {
       this.totalRejectedUnavailable += 1;
       return { status: "unavailable" };
@@ -195,6 +214,7 @@ export class MatchmakingService {
       totalGenderRelaxedMatches: this.totalGenderRelaxedMatches,
       totalLeaves: this.totalLeaves,
       totalRejectedUnavailable: this.totalRejectedUnavailable,
+      totalRateLimited: this.totalRateLimited,
     };
   }
 }

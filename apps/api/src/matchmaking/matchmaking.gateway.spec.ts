@@ -5,6 +5,8 @@ import { DevMockTokenVerifier } from "../auth/google-token-verifier";
 import { FeatureFlagsService } from "../feature-flags/feature-flags.service";
 import { InMemoryFeatureFlagStore } from "../feature-flags/in-memory-feature-flag.store";
 import { InMemoryFeatureFlagAuditLog } from "../feature-flags/in-memory-feature-flag-audit.log";
+import { InMemoryRateLimitStore } from "../rate-limit/in-memory-rate-limit.store";
+import { RateLimitService } from "../rate-limit/rate-limit.service";
 import { InMemoryMatchmakingQueue } from "./in-memory-matchmaking.queue";
 import { MatchmakingGateway } from "./matchmaking.gateway";
 import { MatchmakingService } from "./matchmaking.service";
@@ -54,7 +56,12 @@ function buildGateway(disabled: Array<"queue_entry" | "gender_filters"> = []) {
     new InMemoryFeatureFlagStore(disabled),
     new InMemoryFeatureFlagAuditLog()
   );
-  const service = new MatchmakingService(new InMemoryMatchmakingQueue(), flags);
+  const rateLimits = new RateLimitService(new InMemoryRateLimitStore());
+  const service = new MatchmakingService(
+    new InMemoryMatchmakingQueue(),
+    flags,
+    rateLimits
+  );
   // The gateway reads a logged-in joiner's declared gender + filter off the
   // account, so it needs a real AuthService over an (seedable) in-memory store.
   const store = new InMemoryUserStore();
@@ -166,6 +173,25 @@ describe("MatchmakingGateway", () => {
     await gateway.handleJoin(socket);
 
     expect(emitted.map((e) => e.event)).toContain(MATCHMAKING_EVENTS.error);
+  });
+
+  it("emits a rate-limited event with a retry hint once a guest floods join (stories 142-144)", async () => {
+    const { gateway } = buildGateway();
+    const { socket, emitted } = fakeSocket("s1", guest("g1"));
+
+    // A guest's join limit is 10/min; the 11th attempt from the same identity is
+    // throttled and the client is told how long to wait rather than left hanging.
+    for (let i = 0; i < 11; i += 1) {
+      await gateway.handleJoin(socket);
+    }
+
+    const limited = emitted.filter(
+      (e) => e.event === MATCHMAKING_EVENTS.rateLimited
+    );
+    expect(limited).toHaveLength(1);
+    expect(
+      (limited[0].payload as { retryAfterSeconds: number }).retryAfterSeconds
+    ).toBeGreaterThan(0);
   });
 
   it("acknowledges a leave and clears the queue slot", async () => {
