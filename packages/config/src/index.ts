@@ -11,6 +11,14 @@ export const productConfig = {
   reconnectGraceSeconds: 25,
   nextConfirmSeconds: 3,
   /**
+   * How long a waiting user holds out for a same-matching-language partner before
+   * the pool relaxes and pairs them across languages (story 36). Kept short so
+   * wait times stay low while still preferring a relevant match initially; the
+   * web app can surface a "broadening your search" hint once this window passes.
+   * Shared because the API enforces it and the web app messages it.
+   */
+  languageRelaxAfterSeconds: 15,
+  /**
    * Display-name editing rules shared by the API (which enforces them) and the
    * web app (which hints them in the editor). The PRD allows a once-daily
    * username change for guests and logged-in users (story 16), moderated before

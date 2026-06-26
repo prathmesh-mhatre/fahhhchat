@@ -110,17 +110,47 @@ describe("Matchmaking shared queue (e2e)", () => {
     user.close();
   });
 
+  it("pairs two same-matching-language users from the shared pool (story 36)", async () => {
+    const [a, b] = await Promise.all([
+      connect(await userToken("mm-fr-1")),
+      connect(await userToken("mm-fr-2")),
+    ]);
+
+    const aMatch = once<{ matchId: string }>(a, MATCHMAKING_EVENTS.matchFound);
+    const bMatch = once<{ matchId: string }>(b, MATCHMAKING_EVENTS.matchFound);
+
+    // Both declare French as their matching language in the join payload; they
+    // pair without needing relaxation.
+    a.emit(MATCHMAKING_EVENTS.join, { language: "fr" });
+    await once(a, MATCHMAKING_EVENTS.waiting);
+    b.emit(MATCHMAKING_EVENTS.join, { language: "fr" });
+
+    const [ra, rb] = await Promise.all([aMatch, bMatch]);
+    expect(ra.matchId).toBe(rb.matchId);
+
+    const metrics = await request(app.getHttpServer())
+      .get("/matchmaking/metrics")
+      .expect(200);
+    expect(metrics.body.totalLanguageMatches).toBeGreaterThanOrEqual(1);
+
+    a.close();
+    b.close();
+  });
+
   it("exposes internal queue-health metrics without a public online count", async () => {
     const res = await request(app.getHttpServer())
       .get("/matchmaking/metrics")
       .expect(200);
 
     // The ops shape is present (story 38); `waiting` is an internal field, not a
-    // user-facing online count (story 37).
+    // user-facing online count (story 37). The language-relaxation counters give
+    // operators visibility into how often matching falls back across languages.
     expect(res.body).toMatchObject({
       waiting: expect.any(Number),
       totalJoins: expect.any(Number),
       totalMatches: expect.any(Number),
+      totalLanguageMatches: expect.any(Number),
+      totalRelaxedMatches: expect.any(Number),
     });
   });
 });

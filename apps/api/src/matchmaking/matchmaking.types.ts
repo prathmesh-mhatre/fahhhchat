@@ -1,12 +1,14 @@
+import type { LanguageCode } from "@fahhhchat/config";
 import type { RealtimeIdentity } from "../realtime/realtime.types";
 
 /**
  * A single user waiting in the shared matching pool. The PRD uses *one* global
  * pool for both guests and logged-in users (stories 24-25, "one shared matching
- * pool"), so a participant is just their realtime {@link RealtimeIdentity} plus
- * the socket to reach them on and when they joined. This slice does no language
- * or gender filtering — those soft constraints land in later slices (#18, #19);
- * here every waiter is interchangeable so the oldest pair is matched.
+ * pool"), so a participant is their realtime {@link RealtimeIdentity}, the socket
+ * to reach them on, when they joined, and their matching-language preference.
+ * Language is a *soft* signal: the pool prefers a same-language partner initially
+ * and relaxes across languages over time (story 36); gender filtering is a
+ * separate soft constraint that lands in #19.
  */
 export interface QueuedParticipant {
   identity: RealtimeIdentity;
@@ -14,6 +16,13 @@ export interface QueuedParticipant {
   socketId: string;
   /** Epoch ms the participant entered the queue; drives oldest-first pairing. */
   enqueuedAt: number;
+  /**
+   * The user's matching language (stories 26-28), seeded from their browser
+   * language and normalized to a supported {@link LanguageCode}. Used only to
+   * *prefer* a same-language partner — never a hard filter, so a user is always
+   * matchable across languages once the relaxation window passes.
+   */
+  language: LanguageCode;
 }
 
 /**
@@ -24,6 +33,24 @@ export interface QueuedParticipant {
  */
 export function identityKey(identity: RealtimeIdentity): string {
   return `${identity.kind}:${identity.id}`;
+}
+
+/**
+ * Inputs to the staged pairing step (story 36). The pool first honors the
+ * joiner's {@link language}; failing that it relaxes and pairs them with any
+ * waiter who has waited at least {@link relaxAfterMs}. Passing the joiner's own
+ * key as {@link excludeKey} keeps a duplicate join (e.g. a second tab) from
+ * self-matching.
+ */
+export interface MatchCriteria {
+  /** Identity key to never return (the joiner themselves). */
+  excludeKey: string;
+  /** The joiner's matching language; same-language waiters are preferred. */
+  language: LanguageCode;
+  /** Reference time (epoch ms) for evaluating each waiter's relaxation window. */
+  now: number;
+  /** How long (ms) a waiter must have waited to be eligible across languages. */
+  relaxAfterMs: number;
 }
 
 /**
@@ -48,11 +75,20 @@ export interface MatchmakingQueue {
   /** Whether an identity is currently waiting. */
   contains(key: string): Promise<boolean>;
   /**
-   * Atomically remove and return the oldest waiting participant whose identity
-   * key is not `excludeKey`, or null if nobody else is waiting. This is the pair
-   * step: a joining user takes the longest-waiting *other* user.
+   * Atomically remove and return the best partner for a joiner under staged
+   * language relaxation (story 36), or null if no suitable waiter exists. The
+   * preference order, evaluated oldest-first so nobody starves within a tier, is:
+   *
+   *   1. the oldest waiter sharing the joiner's {@link MatchCriteria.language};
+   *   2. otherwise the oldest waiter who has already waited at least
+   *      `relaxAfterMs` — relaxed across languages so wait times stay low and a
+   *      long-waiting stranger isn't stranded.
+   *
+   * A waiter of a different language who is still inside their relaxation window
+   * is left in the pool. {@link MatchCriteria.excludeKey} is never returned, so a
+   * user (even across duplicate tabs) can never match themselves.
    */
-  takeOldestExcept(excludeKey: string): Promise<QueuedParticipant | null>;
+  takeMatch(criteria: MatchCriteria): Promise<QueuedParticipant | null>;
   /**
    * Remove whichever entry is held on `socketId` (disconnect cleanup). Returns
    * the removed identity key, or null if that socket held no queue slot.
@@ -100,6 +136,17 @@ export interface QueueMetrics {
   totalJoins: number;
   /** Total matches created (each pairs two joins). */
   totalMatches: number;
+  /**
+   * Matches where both sides shared a matching language (story 36). High vs.
+   * {@link totalRelaxedMatches} tells operators language pools are healthy.
+   */
+  totalLanguageMatches: number;
+  /**
+   * Matches that needed cross-language relaxation because no same-language
+   * partner was available in time (story 36). A rising share signals thin
+   * language pools / long language waits worth investigating (story 38).
+   */
+  totalRelaxedMatches: number;
   /** Total explicit leaves (user left the queue before matching). */
   totalLeaves: number;
   /** Joins rejected because the queue_entry kill switch was off. */

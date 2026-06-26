@@ -1,4 +1,8 @@
-import type { MatchmakingQueue, QueuedParticipant } from "./matchmaking.types";
+import type {
+  MatchCriteria,
+  MatchmakingQueue,
+  QueuedParticipant,
+} from "./matchmaking.types";
 
 /**
  * Process-local matching pool. Used in development and tests when no `REDIS_URL`
@@ -8,7 +12,7 @@ import type { MatchmakingQueue, QueuedParticipant } from "./matchmaking.types";
  * production uses Redis.
  *
  * Node runs this single-threaded, so each method is naturally atomic — there is
- * no interleaving between the read and write of `takeOldestExcept`.
+ * no interleaving between the read and write of `takeMatch`.
  */
 export class InMemoryMatchmakingQueue implements MatchmakingQueue {
   private readonly waiting = new Map<string, QueuedParticipant>();
@@ -31,12 +35,29 @@ export class InMemoryMatchmakingQueue implements MatchmakingQueue {
     return this.waiting.has(key);
   }
 
-  async takeOldestExcept(excludeKey: string): Promise<QueuedParticipant | null> {
+  async takeMatch(criteria: MatchCriteria): Promise<QueuedParticipant | null> {
+    const { excludeKey, language, now, relaxAfterMs } = criteria;
+    // The Map iterates in insertion order, i.e. oldest-first, so the first
+    // candidate found in each tier is the longest-waiting one (no starvation).
+    let relaxed: { key: string; participant: QueuedParticipant } | null = null;
     for (const [key, participant] of this.waiting) {
-      if (key !== excludeKey) {
+      if (key === excludeKey) {
+        continue;
+      }
+      // Same-language is the preferred tier; take the oldest such waiter at once.
+      if (participant.language === language) {
         this.waiting.delete(key);
         return participant;
       }
+      // Otherwise remember the oldest cross-language waiter past the relaxation
+      // window, used only if no same-language partner turns up in this scan.
+      if (relaxed === null && now - participant.enqueuedAt >= relaxAfterMs) {
+        relaxed = { key, participant };
+      }
+    }
+    if (relaxed) {
+      this.waiting.delete(relaxed.key);
+      return relaxed.participant;
     }
     return null;
   }

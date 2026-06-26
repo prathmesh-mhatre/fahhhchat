@@ -6,6 +6,7 @@ import {
   WebSocketServer,
 } from "@nestjs/websockets";
 import type { Server, Socket } from "socket.io";
+import { resolveLanguage } from "@fahhhchat/config";
 import { webOrigins } from "../cors-origins";
 import type { AuthenticatedSocketData } from "../realtime/realtime.gateway";
 import { MatchmakingService } from "./matchmaking.service";
@@ -39,7 +40,10 @@ export class MatchmakingGateway implements OnGatewayDisconnect {
   constructor(private readonly matchmaking: MatchmakingService) {}
 
   @SubscribeMessage(MATCHMAKING_EVENTS.join)
-  async handleJoin(client: Socket): Promise<void> {
+  async handleJoin(
+    client: Socket,
+    payload?: { language?: unknown }
+  ): Promise<void> {
     const identity = this.identityOf(client);
     if (!identity) {
       client.emit(MATCHMAKING_EVENTS.error, {
@@ -48,7 +52,12 @@ export class MatchmakingGateway implements OnGatewayDisconnect {
       return;
     }
 
-    const result = await this.matchmaking.join(identity, client.id);
+    // The client carries its own matching-language preference (a guest's
+    // browser-seeded language or a logged-in user's declared one). Normalize to
+    // a supported code here so an unsupported or missing value just falls back
+    // to the default rather than skewing matching (stories 26-28, 36).
+    const language = resolveLanguage(payload?.language);
+    const result = await this.matchmaking.join(identity, client.id, language);
     if (result.status === "unavailable") {
       client.emit(MATCHMAKING_EVENTS.error, {
         message: "Matching is temporarily unavailable. Please try again later.",
