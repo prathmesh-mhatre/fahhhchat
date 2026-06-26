@@ -58,6 +58,32 @@ describe("FeatureFlagsService", () => {
       expect(spy).toHaveBeenCalledTimes(1);
     });
 
+    it("invalidates the cache on a write so the new value is visible immediately (issue #16)", async () => {
+      // Warm the cache with the pre-write state.
+      await expect(service.isEnabled("queue_entry")).resolves.toBe(true);
+
+      // Flip the switch well within the TTL. Without invalidation the cached
+      // `true` would linger for up to FEATURE_FLAG_CACHE_TTL_MS.
+      await service.setEnabled("queue_entry", false, "admin-1");
+
+      await expect(service.isEnabled("queue_entry")).resolves.toBe(false);
+    });
+
+    it("re-reads the store after a write rather than serving the warm cache", async () => {
+      const spy = jest.spyOn(store, "getAll");
+
+      await service.getState(); // warms cache
+      await service.setEnabled("camera_media", false, "admin-1");
+
+      // Measure the read after the write in isolation: the write evicted the
+      // cache, so this getState must miss and hit the store exactly once. (Counted
+      // as a delta because setEnabled itself reads the store to capture the
+      // pre-write value.)
+      const before = spy.mock.calls.length;
+      await service.getState();
+      expect(spy.mock.calls.length).toBe(before + 1);
+    });
+
     it("re-reads the store once the cache TTL elapses", async () => {
       const spy = jest.spyOn(store, "getAll");
       const nowSpy = jest.spyOn(Date, "now");
