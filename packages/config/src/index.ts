@@ -216,6 +216,60 @@ export interface OnboardingStatus {
   required: boolean;
 }
 
+/**
+ * A single rate-limit threshold: at most {@link limit} actions are allowed per
+ * rolling {@link windowSeconds} window before further attempts are throttled.
+ * Shared because the API enforces these and the web apps message them ("you're
+ * doing that too fast — try again in N seconds").
+ */
+export interface RateLimitRule {
+  /** Maximum allowed attempts within the window. */
+  limit: number;
+  /** Window length in seconds the {@link limit} is counted over. */
+  windowSeconds: number;
+}
+
+/**
+ * Identity tiers abuse controls treat differently. Guests are anonymous and
+ * cheap to mint, so they get *stricter* thresholds than logged-in accounts
+ * (story 142); logged-in users still get an *enforced* (not unlimited) ceiling
+ * so login is never an abuse bypass (story 143).
+ */
+export type RateLimitTier = "guest" | "user";
+
+/**
+ * Rate-limited matching actions (story 144): joining the shared pool and
+ * (re)connecting to realtime. Deliberately does *not* include clicking Next —
+ * the PRD forbids a rapid-Next cooldown beyond the two-step confirmation (story
+ * 145), so Next stays fluid and is never throttled here.
+ */
+export type RateLimitAction = "queue_join" | "reconnect";
+
+/**
+ * Layered abuse-control thresholds for matching operations, keyed by action and
+ * identity tier (stories 140-144). Guests are throttled harder than logged-in
+ * users on every action (stricter `limit`), but both tiers are capped so neither
+ * anonymous abuse nor a logged-in bot can overload matching. Enforced by the API
+ * keyed on the layered identity signal available today — the logged-in account
+ * id or the guest session id (story 140); IP/device signals and adaptive bot
+ * protection layer on in their own slices. Windows are short so a brief burst
+ * recovers quickly for ordinary users. Shared so the web app can surface the
+ * same numbers it is being limited by.
+ */
+export const rateLimits: Record<
+  RateLimitAction,
+  Record<RateLimitTier, RateLimitRule>
+> = {
+  queue_join: {
+    guest: { limit: 10, windowSeconds: 60 },
+    user: { limit: 20, windowSeconds: 60 }
+  },
+  reconnect: {
+    guest: { limit: 15, windowSeconds: 60 },
+    user: { limit: 30, windowSeconds: 60 }
+  }
+};
+
 export const featureFlagKeys = [
   "camera_media",
   "gender_filters",

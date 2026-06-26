@@ -1,6 +1,8 @@
 import { FeatureFlagsService } from "../feature-flags/feature-flags.service";
 import { InMemoryFeatureFlagStore } from "../feature-flags/in-memory-feature-flag.store";
 import { InMemoryFeatureFlagAuditLog } from "../feature-flags/in-memory-feature-flag-audit.log";
+import { InMemoryRateLimitStore } from "../rate-limit/in-memory-rate-limit.store";
+import { RateLimitService } from "../rate-limit/rate-limit.service";
 import { InMemoryMatchmakingQueue } from "./in-memory-matchmaking.queue";
 import { MatchmakingService } from "./matchmaking.service";
 import type { RealtimeIdentity } from "../realtime/realtime.types";
@@ -15,7 +17,13 @@ function buildService(disabled: Array<"queue_entry" | "gender_filters"> = []) {
     new InMemoryFeatureFlagAuditLog()
   );
   const queue = new InMemoryMatchmakingQueue();
-  return { service: new MatchmakingService(queue, flags), queue, flags };
+  const rateLimits = new RateLimitService(new InMemoryRateLimitStore());
+  return {
+    service: new MatchmakingService(queue, flags, rateLimits),
+    queue,
+    flags,
+    rateLimits,
+  };
 }
 
 describe("MatchmakingService (stories 24-25, 37-38)", () => {
@@ -99,7 +107,54 @@ describe("MatchmakingService (stories 24-25, 37-38)", () => {
       totalGenderRelaxedMatches: 0,
       totalLeaves: 1,
       totalRejectedUnavailable: 1,
+      totalRateLimited: 0,
     });
+  });
+
+  it("throttles a guest hammering join past their queue-join limit (stories 142-144)", async () => {
+    const { service } = buildService();
+    const t0 = new Date("2026-06-26T00:00:00.000Z");
+
+    // A guest's queue-join limit is 10 per 60s (stricter than a user's 20). The
+    // first 10 attempts are accepted (queued/idempotent), the 11th is throttled.
+    for (let i = 0; i < 10; i += 1) {
+      const ok = await service.join(guest("spammer"), `s${i}`, {}, t0);
+      expect(ok.status).toBe("queued");
+    }
+    const throttled = await service.join(guest("spammer"), "s10", {}, t0);
+    expect(throttled.status).toBe("rate_limited");
+    if (throttled.status !== "rate_limited") throw new Error("expected throttle");
+    expect(throttled.retryAfterSeconds).toBeGreaterThan(0);
+    expect((await service.metrics()).totalRateLimited).toBe(1);
+  });
+
+  it("gives logged-in users a higher join ceiling than guests (story 143)", async () => {
+    const { service } = buildService();
+    const t0 = new Date("2026-06-26T00:00:00.000Z");
+
+    // A logged-in user is still capped (login is no bypass) but at 20, not 10 —
+    // so where a guest would already be throttled, the user's 11th join is fine.
+    for (let i = 0; i < 11; i += 1) {
+      const result = await service.join(user("heavy"), `s${i}`, {}, t0);
+      expect(result.status).toBe("queued");
+    }
+  });
+
+  it("recovers the join budget after the window elapses", async () => {
+    const { service } = buildService();
+    const t0 = new Date("2026-06-26T00:00:00.000Z");
+    const later = new Date(t0.getTime() + 61 * 1000);
+
+    for (let i = 0; i < 10; i += 1) {
+      await service.join(guest("g1"), `s${i}`, {}, t0);
+    }
+    expect((await service.join(guest("g1"), "s10", {}, t0)).status).toBe(
+      "rate_limited"
+    );
+    // A full window later the counter has reset and the guest can join again.
+    expect((await service.join(guest("g1"), "s11", {}, later)).status).toBe(
+      "queued"
+    );
   });
 });
 

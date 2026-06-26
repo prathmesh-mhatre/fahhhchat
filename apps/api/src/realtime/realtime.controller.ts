@@ -1,13 +1,17 @@
 import {
   Controller,
   HttpCode,
+  HttpException,
+  HttpStatus,
   Post,
   Req,
+  Res,
   UnauthorizedException,
 } from "@nestjs/common";
-import type { Request } from "express";
+import type { Request, Response } from "express";
 import { AuthService } from "../auth/auth.service";
 import { USER_COOKIE_NAME } from "../auth/auth.types";
+import { RateLimitService } from "../rate-limit/rate-limit.service";
 import { GuestSessionService } from "../session/guest-session.service";
 import { GUEST_COOKIE_NAME } from "../session/session.types";
 import { RealtimeTokenService } from "./realtime-token.service";
@@ -26,18 +30,46 @@ export class RealtimeController {
     private readonly tokens: RealtimeTokenService,
     private readonly auth: AuthService,
     private readonly guestSessions: GuestSessionService,
+    private readonly rateLimits: RateLimitService,
   ) {}
 
-  /** Mint a handshake token for the current cookie identity, or 401 if none. */
+  /**
+   * Mint a handshake token for the current cookie identity, or 401 if none.
+   *
+   * Each socket (re)connect needs a fresh token, so this endpoint is the natural
+   * choke point for the reconnect throttle (story 144): a client that loops
+   * through reconnects — or a bot minting tokens to flood realtime — is capped
+   * per identity, stricter for guests than logged-in users (stories 142-143).
+   * A throttled caller gets a 429 with a `Retry-After` header rather than a
+   * token. The legitimate reconnect-grace flow (#25) reconnects far below this
+   * ceiling, so ordinary users never see it.
+   */
   @Post("token")
   @HttpCode(200)
-  async issueToken(@Req() req: Request): Promise<RealtimeTokenResponse> {
+  async issueToken(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<RealtimeTokenResponse> {
     const identity = await this.resolveIdentity(req);
     if (!identity) {
       throw new UnauthorizedException(
         "Confirm your age and accept the terms, or sign in, before connecting.",
       );
     }
+
+    const decision = await this.rateLimits.consume("reconnect", identity);
+    if (!decision.allowed) {
+      res.setHeader("Retry-After", String(decision.retryAfterSeconds));
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          message: "Too many connection attempts. Please slow down.",
+          retryAfterSeconds: decision.retryAfterSeconds,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     return this.tokens.issue(identity);
   }
 

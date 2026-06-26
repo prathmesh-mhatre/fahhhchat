@@ -192,12 +192,16 @@ export interface Match {
 /**
  * Outcome of a join attempt. `unavailable` is returned when the `queue_entry`
  * kill switch is off (story 84) so the gateway can tell the user the pool is
- * closed rather than silently dropping them.
+ * closed rather than silently dropping them. `rate_limited` is returned when the
+ * joiner has hit their queue-join threshold (stories 142-144) — stricter for
+ * guests — carrying how long until they may retry so the gateway can say so
+ * rather than silently dropping the attempt.
  */
 export type JoinResult =
   | { status: "matched"; match: Match }
   | { status: "queued" }
-  | { status: "unavailable" };
+  | { status: "unavailable" }
+  | { status: "rate_limited"; retryAfterSeconds: number };
 
 /**
  * Internal queue-health snapshot for operators (story 38). Deliberately a
@@ -241,6 +245,13 @@ export interface QueueMetrics {
   totalLeaves: number;
   /** Joins rejected because the queue_entry kill switch was off. */
   totalRejectedUnavailable: number;
+  /**
+   * Join attempts throttled because the joiner exceeded their queue-join rate
+   * limit (stories 142-144). A rising count signals abuse pressure or a buggy
+   * client retrying in a tight loop — exactly the bot-overload signal the limit
+   * exists to contain (story 144), surfaced here for operator visibility.
+   */
+  totalRateLimited: number;
 }
 
 /** Socket.IO event names for the matchmaking surface (the realtime contract). */
@@ -255,6 +266,8 @@ export const MATCHMAKING_EVENTS = {
   left: "queue:left",
   /** Server → client: the queue is closed (kill switch off) or join failed. */
   error: "queue:error",
+  /** Server → client: join attempt throttled; carries `retryAfterSeconds`. */
+  rateLimited: "queue:rate-limited",
   /** Server → client: paired with a stranger; carries the match handle. */
   matchFound: "match:found",
 } as const;
@@ -268,4 +281,14 @@ export const MATCHMAKING_EVENTS = {
 export interface MatchFoundPayload {
   matchId: string;
   role: "initiator" | "responder";
+}
+
+/**
+ * Payload for the {@link MATCHMAKING_EVENTS.rateLimited} event: the joiner hit
+ * their queue-join threshold (stories 142-144). Carries the whole-second wait
+ * until they may retry so the web app can show an honest "slow down, try again
+ * in N seconds" rather than appearing to hang.
+ */
+export interface RateLimitedPayload {
+  retryAfterSeconds: number;
 }
