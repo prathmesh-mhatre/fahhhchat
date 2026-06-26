@@ -4,7 +4,13 @@ import { FeatureFlagsController } from "./feature-flags.controller";
 import { FeatureFlagsService } from "./feature-flags.service";
 import { FeatureFlagGuard } from "./require-feature-flag.guard";
 import { InMemoryFeatureFlagStore } from "./in-memory-feature-flag.store";
-import { FEATURE_FLAG_STORE, type FeatureFlagStore } from "./feature-flags.types";
+import { InMemoryFeatureFlagAuditLog } from "./in-memory-feature-flag-audit.log";
+import {
+  FEATURE_FLAG_AUDIT_LOG,
+  FEATURE_FLAG_STORE,
+  type FeatureFlagAuditLog,
+  type FeatureFlagStore
+} from "./feature-flags.types";
 
 /**
  * Parse the boot-time kill-switch override: a comma-separated list of flag keys
@@ -39,12 +45,18 @@ function createFeatureFlagStore(): FeatureFlagStore {
   return new InMemoryFeatureFlagStore(disabledFromEnv());
 }
 
+function createFeatureFlagAuditLog(): FeatureFlagAuditLog {
+  // A Postgres-backed audit log drops in here later (selected on DATABASE_URL).
+  return new InMemoryFeatureFlagAuditLog();
+}
+
 @Module({
   controllers: [FeatureFlagsController],
   providers: [
     FeatureFlagsService,
     FeatureFlagGuard,
-    { provide: FEATURE_FLAG_STORE, useFactory: createFeatureFlagStore }
+    { provide: FEATURE_FLAG_STORE, useFactory: createFeatureFlagStore },
+    { provide: FEATURE_FLAG_AUDIT_LOG, useFactory: createFeatureFlagAuditLog }
   ],
   exports: [FeatureFlagsService, FeatureFlagGuard]
 })

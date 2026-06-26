@@ -11,6 +11,15 @@ import { InMemoryUserStore } from "./in-memory-user.store";
 import { DevMockTokenVerifier, encodeMockGoogleToken } from "./google-token-verifier";
 import { FeatureFlagsService } from "../feature-flags/feature-flags.service";
 import { InMemoryFeatureFlagStore } from "../feature-flags/in-memory-feature-flag.store";
+import { InMemoryFeatureFlagAuditLog } from "../feature-flags/in-memory-feature-flag-audit.log";
+
+/** A feature-flags service seeded with the given disabled kill switches. */
+function flagsWith(disabled: ("guest_access" | "queue_entry" | "camera_media" | "gender_filters")[] = []): FeatureFlagsService {
+  return new FeatureFlagsService(
+    new InMemoryFeatureFlagStore(disabled),
+    new InMemoryFeatureFlagAuditLog()
+  );
+}
 
 /** Mint a valid app token for a user id, mirroring AuthService's signing scheme. */
 function mintTokenFor(secret: string, userId: string): string {
@@ -28,11 +37,7 @@ describe("AuthService", () => {
 
   beforeEach(() => {
     store = new InMemoryUserStore();
-    service = new AuthService(
-      store,
-      new DevMockTokenVerifier(),
-      new FeatureFlagsService(new InMemoryFeatureFlagStore())
-    );
+    service = new AuthService(store, new DevMockTokenVerifier(), flagsWith());
   });
 
   const aliceToken = encodeMockGoogleToken({ sub: "google-alice", email: "alice@example.com" });
@@ -358,7 +363,7 @@ describe("AuthService", () => {
       const killed = new AuthService(
         store,
         new DevMockTokenVerifier(),
-        new FeatureFlagsService(new InMemoryFeatureFlagStore(["gender_filters"]))
+        flagsWith(["gender_filters"])
       );
       const { token } = await killed.loginWithGoogle(aliceToken);
       await expect(

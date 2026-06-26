@@ -4,10 +4,14 @@ import { GuestSessionService } from "./guest-session.service";
 import { InMemorySessionStore } from "./in-memory-session.store";
 import { FeatureFlagsService } from "../feature-flags/feature-flags.service";
 import { InMemoryFeatureFlagStore } from "../feature-flags/in-memory-feature-flag.store";
+import { InMemoryFeatureFlagAuditLog } from "../feature-flags/in-memory-feature-flag-audit.log";
 
-/** A feature-flags service with all kill switches at their default (enabled). */
-function enabledFlags(): FeatureFlagsService {
-  return new FeatureFlagsService(new InMemoryFeatureFlagStore());
+/** A feature-flags service seeded with the given disabled kill switches. */
+function flagsWith(disabled: ("guest_access" | "queue_entry" | "camera_media" | "gender_filters")[] = []): FeatureFlagsService {
+  return new FeatureFlagsService(
+    new InMemoryFeatureFlagStore(disabled),
+    new InMemoryFeatureFlagAuditLog()
+  );
 }
 
 describe("GuestSessionService", () => {
@@ -20,7 +24,7 @@ describe("GuestSessionService", () => {
 
   beforeEach(() => {
     store = new InMemorySessionStore();
-    service = new GuestSessionService(store, enabledFlags());
+    service = new GuestSessionService(store, flagsWith());
   });
 
   it("rejects acceptance when 18+ is not confirmed", async () => {
@@ -30,10 +34,7 @@ describe("GuestSessionService", () => {
   });
 
   it("rejects guest acceptance when the guest_access kill switch is off (story 84)", async () => {
-    const killed = new GuestSessionService(
-      store,
-      new FeatureFlagsService(new InMemoryFeatureFlagStore(["guest_access"]))
-    );
+    const killed = new GuestSessionService(store, flagsWith(["guest_access"]));
     await expect(
       killed.accept({ ageConfirmed: true, legalVersion: productConfig.legalVersion })
     ).rejects.toBeInstanceOf(ServiceUnavailableException);
@@ -101,7 +102,7 @@ describe("GuestSessionService", () => {
 
   it("returns null when the signed session is unknown to the store", async () => {
     // A correctly signed token whose record was never saved (e.g. expired/evicted).
-    const orphan = new GuestSessionService(new InMemorySessionStore(), enabledFlags());
+    const orphan = new GuestSessionService(new InMemorySessionStore(), flagsWith());
     const { token } = await orphan.accept({
       ageConfirmed: true,
       legalVersion: productConfig.legalVersion

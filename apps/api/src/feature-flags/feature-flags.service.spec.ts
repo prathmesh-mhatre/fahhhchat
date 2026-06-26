@@ -2,15 +2,18 @@ import { ServiceUnavailableException } from "@nestjs/common";
 import { defaultFeatureFlags } from "@fahhhchat/config";
 import { FeatureFlagsService } from "./feature-flags.service";
 import { InMemoryFeatureFlagStore } from "./in-memory-feature-flag.store";
+import { InMemoryFeatureFlagAuditLog } from "./in-memory-feature-flag-audit.log";
 import { FEATURE_FLAG_CACHE_TTL_MS } from "./feature-flags.types";
 
 describe("FeatureFlagsService", () => {
   let store: InMemoryFeatureFlagStore;
+  let audit: InMemoryFeatureFlagAuditLog;
   let service: FeatureFlagsService;
 
   beforeEach(() => {
     store = new InMemoryFeatureFlagStore();
-    service = new FeatureFlagsService(store);
+    audit = new InMemoryFeatureFlagAuditLog();
+    service = new FeatureFlagsService(store, audit);
   });
 
   describe("default state", () => {
@@ -23,10 +26,8 @@ describe("FeatureFlagsService", () => {
 
   describe("overrides", () => {
     it("merges a stored disable over the defaults", async () => {
+      // No read has warmed the cache yet, so the next getState reflects the write.
       await service.setEnabled("guest_access", false, "admin-1");
-
-      // Force a cache refresh so the new override is picked up immediately.
-      jest.spyOn(Date, "now").mockReturnValue(FEATURE_FLAG_CACHE_TTL_MS + 1);
       const state = await service.getState();
 
       expect(state.guest_access).toBe(false);
@@ -83,17 +84,56 @@ describe("FeatureFlagsService", () => {
     });
 
     it("throws 503 with the surface's message when disabled", async () => {
-      const killed = new FeatureFlagsService(new InMemoryFeatureFlagStore(["queue_entry"]));
+      const killed = new FeatureFlagsService(
+        new InMemoryFeatureFlagStore(["queue_entry"]),
+        new InMemoryFeatureFlagAuditLog()
+      );
       await expect(killed.assertEnabled("queue_entry", "Queue closed.")).rejects.toBeInstanceOf(
         ServiceUnavailableException
       );
     });
   });
 
+  describe("audit log (story 85)", () => {
+    it("records the transition, actor, and timestamp for each change", async () => {
+      const record = await service.setEnabled("camera_media", false, "admin-7");
+
+      const trail = await service.auditTrail();
+      expect(trail).toHaveLength(1);
+      expect(trail[0]).toEqual({
+        key: "camera_media",
+        previousEnabled: true,
+        enabled: false,
+        actor: "admin-7",
+        changedAt: record.updatedAt
+      });
+    });
+
+    it("appends an entry per change, oldest first, capturing each transition", async () => {
+      // Each write reads the prior value uncached, so the transitions are exact
+      // even back-to-back within the read-cache TTL.
+      await service.setEnabled("queue_entry", false, "admin-1");
+      await service.setEnabled("queue_entry", true, "admin-2");
+
+      const trail = await service.auditTrail();
+      expect(trail.map((e) => [e.previousEnabled, e.enabled, e.actor])).toEqual([
+        [true, false, "admin-1"],
+        [false, true, "admin-2"]
+      ]);
+    });
+
+    it("does not write an audit entry for a read", async () => {
+      await service.getState();
+      await service.isEnabled("guest_access");
+      await expect(service.auditTrail()).resolves.toEqual([]);
+    });
+  });
+
   describe("boot-time seeding", () => {
     it("starts a surface disabled when seeded as a kill switch", async () => {
       const seeded = new FeatureFlagsService(
-        new InMemoryFeatureFlagStore(["camera_media", "guest_access"])
+        new InMemoryFeatureFlagStore(["camera_media", "guest_access"]),
+        new InMemoryFeatureFlagAuditLog()
       );
       const state = await seeded.getState();
       expect(state.camera_media).toBe(false);
