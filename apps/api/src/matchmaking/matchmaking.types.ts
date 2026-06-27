@@ -64,6 +64,15 @@ export function identityKey(identity: RealtimeIdentity): string {
 export interface MatchCriteria {
   /** Identity key to never return (the joiner themselves). */
   excludeKey: string;
+  /**
+   * Additional identity keys to never return: strangers the joiner is under a
+   * rematch-prevention window with after a report-with-block or block (issue #27,
+   * stories 53-54). Computed per join by the {@link
+   * import("../rematch/rematch-guard.service").RematchGuardService} and skipped in
+   * the pairing scan exactly like {@link excludeKey}. Empty in the common case (no
+   * active exclusions), so ordinary matching is unaffected.
+   */
+  excludeKeys: readonly string[];
   /** The joiner's matching language; same-language waiters are preferred. */
   language: LanguageCode;
   /** Reference time (epoch ms) for evaluating each waiter's relaxation window. */

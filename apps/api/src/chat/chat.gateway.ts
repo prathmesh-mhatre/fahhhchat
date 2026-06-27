@@ -6,7 +6,7 @@ import {
   WebSocketServer,
 } from "@nestjs/websockets";
 import type { Server, Socket } from "socket.io";
-import { productConfig } from "@fahhhchat/config";
+import { productConfig, reportDefaultsAlsoBlock } from "@fahhhchat/config";
 import { webOrigins } from "../cors-origins";
 import type { AuthenticatedSocketData } from "../realtime/realtime.gateway";
 import { ChatService } from "./chat.service";
@@ -19,6 +19,7 @@ import {
   type MatchEndedPayload,
   type PartnerDisconnectedPayload,
   type PartnerReconnectedPayload,
+  type ReportMatchPayload,
   type ResumeFailedPayload,
   type ResumedPayload,
   type SendFailedPayload,
@@ -168,6 +169,53 @@ export class ChatGateway implements OnGatewayDisconnect {
     }
 
     const ended = await this.chat.nextMatch(identity);
+    if (ended) {
+      this.notifyEnded(ended);
+    }
+  }
+
+  /**
+   * Report the current match's stranger and end the chat (issue #27, stories 52,
+   * 55-56). The report's only client-supplied input is whether to *also block*
+   * (story 56); an absent flag falls back to the shared protective default rather
+   * than skipping the block, so a minimal client still gets rematch protection.
+   * The match is resolved from the socket's verified identity; the partner is told
+   * the chat ended (the reporter's client already moved on, like Next). An
+   * unauthenticated socket, or one not in a live match, is a silent no-op — there
+   * is nothing to end and report has no ack.
+   */
+  @SubscribeMessage(CHAT_EVENTS.report)
+  async handleReport(
+    client: Socket,
+    payload?: ReportMatchPayload,
+  ): Promise<void> {
+    const identity = this.identityOf(client);
+    if (!identity) {
+      return;
+    }
+
+    const alsoBlock = payload?.alsoBlock ?? reportDefaultsAlsoBlock;
+    const ended = await this.chat.reportMatch(identity, alsoBlock);
+    if (ended) {
+      this.notifyEnded(ended);
+    }
+  }
+
+  /**
+   * Block the current match's stranger and end the chat (issue #27, stories
+   * 53-55). A separate control from {@link handleReport}: it always records the
+   * rematch-prevention block and files no report. Resolved from the socket's
+   * verified identity and notified partner-only, mirroring Next/report. A silent
+   * no-op for an unauthenticated socket or one not in a live match.
+   */
+  @SubscribeMessage(CHAT_EVENTS.block)
+  async handleBlock(client: Socket): Promise<void> {
+    const identity = this.identityOf(client);
+    if (!identity) {
+      return;
+    }
+
+    const ended = await this.chat.blockMatch(identity);
     if (ended) {
       this.notifyEnded(ended);
     }

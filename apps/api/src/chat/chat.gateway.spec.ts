@@ -7,6 +7,8 @@ import type {
 import type { RealtimeIdentity } from "../realtime/realtime.types";
 import { InMemoryRateLimitStore } from "../rate-limit/in-memory-rate-limit.store";
 import { RateLimitService } from "../rate-limit/rate-limit.service";
+import { InMemoryRematchGuardStore } from "../rematch/in-memory-rematch-guard.store";
+import { RematchGuardService } from "../rematch/rematch-guard.service";
 import { ChatGateway } from "./chat.gateway";
 import { ChatService } from "./chat.service";
 import { CHAT_EVENTS, type DisplayNameResolver } from "./chat.types";
@@ -73,11 +75,17 @@ const resolver: DisplayNameResolver = {
 
 function buildGateway() {
   const rateLimits = new RateLimitService(new InMemoryRateLimitStore());
-  const chat = new ChatService(new InMemoryChatStore(), resolver, rateLimits);
+  const rematchGuard = new RematchGuardService(new InMemoryRematchGuardStore());
+  const chat = new ChatService(
+    new InMemoryChatStore(),
+    resolver,
+    rateLimits,
+    rematchGuard,
+  );
   const gateway = new ChatGateway(chat);
   const { server, delivered } = fakeServer();
   (gateway as unknown as { server: Server }).server = server;
-  return { gateway, chat, delivered };
+  return { gateway, chat, delivered, rematchGuard };
 }
 
 const INITIATOR = { identity: user("u1"), socketId: "s-init" };
@@ -251,6 +259,68 @@ describe("ChatGateway", () => {
       await gateway.handleNext(unmatched.socket);
 
       expect(delivered).toHaveLength(0);
+    });
+  });
+
+  describe("report and block (issue #27, stories 52-56)", () => {
+    it("reporting ends the match, tells only the partner (reason `report`), and blocks by default", async () => {
+      const { gateway, chat, delivered, rematchGuard } = buildGateway();
+      await seedMatch(chat);
+      const reporter = fakeSocket(INITIATOR.socketId, INITIATOR.identity);
+
+      // Omit alsoBlock entirely — the default (story 56) must still block.
+      await gateway.handleReport(reporter.socket, undefined);
+
+      const ended = delivered.filter((d) => d.event === CHAT_EVENTS.matchEnded);
+      expect(ended).toHaveLength(1);
+      expect(ended[0].to).toBe(RESPONDER.socketId);
+      expect((ended[0].payload as { reason: string }).reason).toBe("report");
+      expect(reporter.emitted).toHaveLength(0);
+      expect(await chat.activeMatchFor(INITIATOR.identity)).toBeNull();
+      // Default also-block recorded the rematch-prevention pair.
+      expect(await rematchGuard.excludedKeysFor("user:u1")).toEqual([
+        "guest:g1",
+      ]);
+    });
+
+    it("honors alsoBlock:false so a report without a block records no exclusion", async () => {
+      const { gateway, chat, delivered, rematchGuard } = buildGateway();
+      await seedMatch(chat);
+      const reporter = fakeSocket(INITIATOR.socketId, INITIATOR.identity);
+
+      await gateway.handleReport(reporter.socket, { alsoBlock: false });
+
+      expect(
+        delivered.filter((d) => d.event === CHAT_EVENTS.matchEnded),
+      ).toHaveLength(1);
+      expect(await rematchGuard.excludedKeysFor("user:u1")).toEqual([]);
+    });
+
+    it("blocking ends the match (reason `block`) and always records the exclusion", async () => {
+      const { gateway, chat, delivered, rematchGuard } = buildGateway();
+      await seedMatch(chat);
+      const blocker = fakeSocket(RESPONDER.socketId, RESPONDER.identity);
+
+      await gateway.handleBlock(blocker.socket);
+
+      const ended = delivered.filter((d) => d.event === CHAT_EVENTS.matchEnded);
+      expect(ended).toHaveLength(1);
+      expect(ended[0].to).toBe(INITIATOR.socketId);
+      expect((ended[0].payload as { reason: string }).reason).toBe("block");
+      expect(await rematchGuard.excludedKeysFor("guest:g1")).toEqual([
+        "user:u1",
+      ]);
+    });
+
+    it("are silent no-ops for an unauthenticated socket", async () => {
+      const { gateway, delivered } = buildGateway();
+      const rogue = fakeSocket("rogue"); // no identity
+
+      await gateway.handleReport(rogue.socket, { alsoBlock: true });
+      await gateway.handleBlock(rogue.socket);
+
+      expect(delivered).toHaveLength(0);
+      expect(rogue.emitted).toHaveLength(0);
     });
   });
 

@@ -3,6 +3,8 @@ import { InMemoryFeatureFlagStore } from "../feature-flags/in-memory-feature-fla
 import { InMemoryFeatureFlagAuditLog } from "../feature-flags/in-memory-feature-flag-audit.log";
 import { InMemoryRateLimitStore } from "../rate-limit/in-memory-rate-limit.store";
 import { RateLimitService } from "../rate-limit/rate-limit.service";
+import { InMemoryRematchGuardStore } from "../rematch/in-memory-rematch-guard.store";
+import { RematchGuardService } from "../rematch/rematch-guard.service";
 import { InMemoryMatchmakingQueue } from "./in-memory-matchmaking.queue";
 import { MatchmakingService } from "./matchmaking.service";
 import type { RealtimeIdentity } from "../realtime/realtime.types";
@@ -18,11 +20,13 @@ function buildService(disabled: Array<"queue_entry" | "gender_filters"> = []) {
   );
   const queue = new InMemoryMatchmakingQueue();
   const rateLimits = new RateLimitService(new InMemoryRateLimitStore());
+  const rematchGuard = new RematchGuardService(new InMemoryRematchGuardStore());
   return {
-    service: new MatchmakingService(queue, flags, rateLimits),
+    service: new MatchmakingService(queue, flags, rateLimits, rematchGuard),
     queue,
     flags,
     rateLimits,
+    rematchGuard,
   };
 }
 
@@ -52,6 +56,37 @@ describe("MatchmakingService (stories 24-25, 37-38)", () => {
     // Same identity joins again (e.g. a second tab) — stays queued, no self-match.
     expect((await service.join(guest("g1"), "s2")).status).toBe("queued");
     expect(await queue.size()).toBe(1);
+  });
+
+  it("does not rematch two identities under a rematch-prevention block (issue #27, stories 53-54)", async () => {
+    const { service, rematchGuard, queue } = buildService();
+    // g1 reported/blocked u1 in a prior match, so the two are kept apart.
+    await rematchGuard.preventRematch("guest:g1", "user:u1");
+
+    // g1 is waiting; u1 joins. The only waiter is excluded, so u1 stays queued
+    // rather than being paired straight back with the person they just left.
+    expect((await service.join(guest("g1"), "s1")).status).toBe("queued");
+    expect((await service.join(user("u1"), "s2")).status).toBe("queued");
+    expect(await queue.size()).toBe(2);
+
+    // A third, unrelated user pairs with the oldest waiter (g1) normally — the
+    // block only excludes the specific pair, not matching in general.
+    const third = await service.join(guest("g2"), "s3");
+    expect(third.status).toBe("matched");
+    if (third.status !== "matched") throw new Error("expected a match");
+    expect(third.match.responder.identity).toEqual(guest("g1"));
+  });
+
+  it("matches the blocked pair again once the prevention window lapses (story 54)", async () => {
+    const { service, rematchGuard } = buildService();
+    const t0 = new Date("2026-06-28T00:00:00.000Z");
+    await rematchGuard.preventRematch("guest:g1", "user:u1", t0);
+
+    await service.join(guest("g1"), "s1", {}, t0);
+    // Well past productConfig.rematchPreventionSeconds — the exclusion has lapsed.
+    const later = new Date(t0.getTime() + 2_000 * 1000);
+    const rejoin = await service.join(user("u1"), "s2", {}, later);
+    expect(rejoin.status).toBe("matched");
   });
 
   it("rejects joins when the queue_entry kill switch is off (story 84)", async () => {

@@ -34,6 +34,7 @@ const user = (id: string): RealtimeIdentity => ({ kind: "user", id });
 function criteria(overrides: Partial<MatchCriteria>): MatchCriteria {
   return {
     excludeKey: overrides.excludeKey ?? "none",
+    excludeKeys: overrides.excludeKeys ?? [],
     language: overrides.language ?? "en",
     now: overrides.now ?? Date.now(),
     relaxAfterMs: overrides.relaxAfterMs ?? Number.MAX_SAFE_INTEGER,

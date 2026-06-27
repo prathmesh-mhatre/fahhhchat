@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { RateLimitModule } from "../rate-limit/rate-limit.module";
+import { RematchModule } from "../rematch/rematch.module";
 import { SessionModule } from "../session/session.module";
 import { ChatGateway } from "./chat.gateway";
 import { ChatService } from "./chat.service";
@@ -44,10 +45,12 @@ function createChatStore(): ChatStore {
  * #22, story 40) — captured once at match registration, never client-asserted.
  * Imports {@link RateLimitModule} so {@link ChatService} can meter URL-bearing
  * messages against the per-identity `chat_link` budget for link-spam control
- * (issue #24, story 45).
+ * (issue #24, story 45). Imports {@link RematchModule} so {@link ChatService} can
+ * record a rematch-prevention block when a user reports-with-block or blocks the
+ * stranger they were chatting with (issue #27, stories 53-54).
  */
 @Module({
-  imports: [AuthModule, SessionModule, RateLimitModule],
+  imports: [AuthModule, SessionModule, RateLimitModule, RematchModule],
   providers: [
     ChatService,
     ChatGateway,
