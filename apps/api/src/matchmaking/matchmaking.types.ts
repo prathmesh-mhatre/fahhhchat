@@ -277,10 +277,20 @@ export const MATCHMAKING_EVENTS = {
  * carries the shared {@link Match.matchId} and this client's role, but *not* the
  * partner's identity — the stranger's generated display name/avatar is attached
  * by the chat slice (#21/#15), and the raw partner id is never exposed.
+ *
+ * `partnerLoggedIn` is the one capability bit the chat client needs to gate
+ * post-match camera media (#38, story 97): media is available only when *both*
+ * sides are logged in, and a client already knows its *own* tier, so the only
+ * missing input is whether the stranger is a logged-in account. It is a single
+ * boolean — never the partner's id or any profile detail — so it leaks no
+ * identity while still letting the UI compute eligibility and lock the camera
+ * affordance with the right reason (stories 125-126).
  */
 export interface MatchFoundPayload {
   matchId: string;
   role: "initiator" | "responder";
+  /** Whether the matched stranger is a logged-in account (vs. a guest). */
+  partnerLoggedIn: boolean;
 }
 
 /**

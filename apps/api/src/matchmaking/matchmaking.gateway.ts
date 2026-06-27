@@ -113,13 +113,21 @@ export class MatchmakingGateway implements OnGatewayDisconnect {
    */
   private async announceMatch(match: Match): Promise<void> {
     await this.chat.registerMatch(match);
+    // Each side learns only whether *the other* is a logged-in account — the
+    // single bit the chat client needs to gate post-match camera media (#38,
+    // story 97). A logged-in identity is `kind: "user"`; everything else (a
+    // guest session) is not. No id or profile detail crosses over.
+    const initiatorLoggedIn = match.initiator.identity.kind === "user";
+    const responderLoggedIn = match.responder.identity.kind === "user";
     const toInitiator: MatchFoundPayload = {
       matchId: match.matchId,
       role: "initiator",
+      partnerLoggedIn: responderLoggedIn,
     };
     const toResponder: MatchFoundPayload = {
       matchId: match.matchId,
       role: "responder",
+      partnerLoggedIn: initiatorLoggedIn,
     };
     this.server.to(match.initiator.socketId).emit(MATCHMAKING_EVENTS.matchFound, toInitiator);
     this.server.to(match.responder.socketId).emit(MATCHMAKING_EVENTS.matchFound, toResponder);
