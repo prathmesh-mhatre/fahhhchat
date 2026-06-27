@@ -1,5 +1,10 @@
 import { productConfig } from "@fahhhchat/config";
-import type { ActiveMatch, ChatMessage, ChatStore } from "./chat.types";
+import type {
+  ActiveMatch,
+  ChatMessage,
+  ChatStore,
+  DisconnectMark,
+} from "./chat.types";
 
 interface StoredMatch {
   match: ActiveMatch;
@@ -79,6 +84,58 @@ export class InMemoryChatStore implements ChatStore {
         this.bySocket.delete(participant.socketId);
       }
     }
+    return stored.match;
+  }
+
+  async markDisconnected(
+    socketId: string,
+    graceExpiresAt: string,
+  ): Promise<DisconnectMark | null> {
+    const matchId = this.bySocket.get(socketId);
+    const stored = matchId ? this.matches.get(matchId) : undefined;
+    if (!matchId || !stored) {
+      return null;
+    }
+    const participant = stored.match.participants.find(
+      (p) => p.socketId === socketId,
+    );
+    const partner = stored.match.participants.find(
+      (p) => p.socketId !== socketId,
+    );
+    if (!participant || !partner) {
+      return null;
+    }
+    participant.connected = false;
+    participant.graceExpiresAt = graceExpiresAt;
+    // Drop the dead socket from the index so no send routes to it; the match and
+    // its buffer stay so a reconnect within grace can still pick them up.
+    this.bySocket.delete(socketId);
+    return { match: stored.match, participantKey: participant.identityKey, partner };
+  }
+
+  async reattach(
+    identityKey: string,
+    newSocketId: string,
+  ): Promise<ActiveMatch | null> {
+    const matchId = this.byIdentity.get(identityKey);
+    const stored = matchId ? this.matches.get(matchId) : undefined;
+    if (!matchId || !stored) {
+      return null;
+    }
+    const participant = stored.match.participants.find(
+      (p) => p.identityKey === identityKey,
+    );
+    if (!participant) {
+      return null;
+    }
+    // Retire any prior socket index for this participant, then bind the new one.
+    if (this.bySocket.get(participant.socketId) === matchId) {
+      this.bySocket.delete(participant.socketId);
+    }
+    participant.socketId = newSocketId;
+    participant.connected = true;
+    delete participant.graceExpiresAt;
+    this.bySocket.set(newSocketId, matchId);
     return stored.match;
   }
 }

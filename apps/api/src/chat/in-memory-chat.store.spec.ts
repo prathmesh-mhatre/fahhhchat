@@ -15,12 +15,14 @@ function activeMatch(
         role: "initiator",
         socketId: a.socketId,
         displayName: "Mellow Otter",
+        connected: true,
       },
       {
         identityKey: b.key,
         role: "responder",
         socketId: b.socketId,
         displayName: "Cosmic Sparrow",
+        connected: true,
       },
     ],
   };
@@ -92,6 +94,53 @@ describe("InMemoryChatStore", () => {
       "2",
       "3",
     ]);
+  });
+
+  describe("reconnect grace (story 47)", () => {
+    it("marks a dropped socket disconnected, drops its socket index, and keeps the match", async () => {
+      const store = new InMemoryChatStore();
+      await store.createMatch(activeMatch("m1", a, b));
+
+      const mark = await store.markDisconnected(a.socketId, "2026-06-27T00:00:25Z");
+
+      expect(mark?.participantKey).toBe(a.key);
+      expect(mark?.partner.identityKey).toBe(b.key);
+      // The match still routes by identity, but the dead socket no longer does.
+      expect((await store.getMatchByIdentity(a.key))?.matchId).toBe("m1");
+      expect(await store.getMatchBySocket(a.socketId)).toBeNull();
+      const self = (await store.getMatchByIdentity(a.key))?.participants.find(
+        (p) => p.identityKey === a.key,
+      );
+      expect(self?.connected).toBe(false);
+      expect(self?.graceExpiresAt).toBe("2026-06-27T00:00:25Z");
+    });
+
+    it("returns null when the dropped socket was in no match", async () => {
+      const store = new InMemoryChatStore();
+      expect(await store.markDisconnected("ghost", "t")).toBeNull();
+    });
+
+    it("rebinds a reconnecting identity to a fresh socket and clears grace", async () => {
+      const store = new InMemoryChatStore();
+      await store.createMatch(activeMatch("m1", a, b));
+      await store.markDisconnected(a.socketId, "2026-06-27T00:00:25Z");
+
+      const match = await store.reattach(a.key, "s-a2");
+
+      expect(match?.matchId).toBe("m1");
+      // The new socket routes; the old one stays retired.
+      expect((await store.getMatchBySocket("s-a2"))?.matchId).toBe("m1");
+      expect(await store.getMatchBySocket(a.socketId)).toBeNull();
+      const self = match?.participants.find((p) => p.identityKey === a.key);
+      expect(self?.connected).toBe(true);
+      expect(self?.socketId).toBe("s-a2");
+      expect(self?.graceExpiresAt).toBeUndefined();
+    });
+
+    it("returns null when reattaching an identity with no live match", async () => {
+      const store = new InMemoryChatStore();
+      expect(await store.reattach("user:nobody", "s-x")).toBeNull();
+    });
   });
 
   it("keeps a participant's newer match when an old one with the same identity is torn down", async () => {

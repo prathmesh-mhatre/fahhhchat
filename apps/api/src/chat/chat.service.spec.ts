@@ -316,6 +316,157 @@ describe("ChatService", () => {
     });
   });
 
+  describe("reconnect grace (story 47)", () => {
+    const t0 = new Date("2026-06-26T12:00:00.000Z");
+    /** A time `seconds` after t0. */
+    const at = (seconds: number) =>
+      new Date(t0.getTime() + seconds * 1000);
+    const afterGrace = at(productConfig.reconnectGraceSeconds + 1);
+
+    it("holds the match open and reports the partner to warn when a socket drops", async () => {
+      const { service } = buildService();
+      await service.registerMatch(match(initiator, responder));
+
+      const result = await service.beginReconnectGrace(initiator.socketId, t0);
+
+      expect(result.status).toBe("grace");
+      if (result.status !== "grace") return;
+      expect(result.matchId).toBe("m1");
+      expect(result.participantKey).toBe("user:u1");
+      expect(result.partnerSocketId).toBe(responder.socketId);
+      // The match is NOT torn down — the partner can still be looked up.
+      expect(await service.activeMatchFor(responder.identity)).not.toBeNull();
+    });
+
+    it("is a no-op for a socket that was never in a match", async () => {
+      const { service } = buildService();
+      const result = await service.beginReconnectGrace("ghost", t0);
+      expect(result).toEqual({ status: "none" });
+    });
+
+    it("ends the match immediately if the partner is already away", async () => {
+      const { service } = buildService();
+      await service.registerMatch(match(initiator, responder));
+
+      // Initiator drops (grace), then responder drops too: nobody left to wait for.
+      await service.beginReconnectGrace(initiator.socketId, t0);
+      const result = await service.beginReconnectGrace(responder.socketId, at(1));
+
+      expect(result.status).toBe("ended");
+      if (result.status !== "ended") return;
+      expect(await service.activeMatchFor(initiator.identity)).toBeNull();
+    });
+
+    it("buffers a partner's messages while a participant is away, and replays them on resume", async () => {
+      const { service } = buildService();
+      await service.registerMatch(match(initiator, responder));
+      await service.beginReconnectGrace(initiator.socketId, t0);
+
+      // The still-present responder keeps chatting; the message buffers.
+      await service.send(responder.identity, { text: "you there?" }, at(2));
+
+      const resumed = await service.resume(initiator.identity, "s-init-2", at(5));
+
+      expect(resumed.status).toBe("resumed");
+      if (resumed.status !== "resumed") return;
+      expect(resumed.role).toBe("initiator");
+      expect(resumed.partnerConnected).toBe(true);
+      expect(resumed.partnerSocketId).toBe(responder.socketId);
+      expect(resumed.buffer.map((m) => m.text)).toEqual(["you there?"]);
+    });
+
+    it("routes to the reconnected participant's new socket after resume", async () => {
+      const { service } = buildService();
+      await service.registerMatch(match(initiator, responder));
+      await service.beginReconnectGrace(initiator.socketId, t0);
+      await service.resume(initiator.identity, "s-init-2", at(5));
+
+      // The responder's next message now targets the fresh socket, not the dead one.
+      const delivered = await service.send(
+        responder.identity,
+        { text: "welcome back" },
+        at(6),
+      );
+      expect(delivered.status).toBe("delivered");
+      if (delivered.status !== "delivered") return;
+      expect(delivered.recipientSocketId).toBe("s-init-2");
+    });
+
+    it("refuses a resume once the grace window has lapsed, and reaps the match", async () => {
+      const { service } = buildService();
+      await service.registerMatch(match(initiator, responder));
+      await service.beginReconnectGrace(initiator.socketId, t0);
+
+      const result = await service.resume(
+        initiator.identity,
+        "s-init-2",
+        afterGrace,
+      );
+
+      expect(result.status).toBe("no_active_match");
+      if (result.status !== "no_active_match") return;
+      // The lingering match is torn down and the partner is reported to notify.
+      expect(result.ended?.reason).toBe("timeout");
+      expect(result.ended?.notifySocketIds).toEqual([responder.socketId]);
+      expect(await service.activeMatchFor(responder.identity)).toBeNull();
+    });
+
+    it("ends the match with timeout when the grace window expires", async () => {
+      const { service } = buildService();
+      await service.registerMatch(match(initiator, responder));
+      await service.beginReconnectGrace(initiator.socketId, t0);
+
+      const ended = await service.expireReconnectGrace(
+        "m1",
+        "user:u1",
+        afterGrace,
+      );
+
+      expect(ended?.reason).toBe("timeout");
+      expect(ended?.notifySocketIds).toEqual([responder.socketId]);
+      expect(await service.activeMatchFor(responder.identity)).toBeNull();
+    });
+
+    it("does not expire a participant who reconnected in time", async () => {
+      const { service } = buildService();
+      await service.registerMatch(match(initiator, responder));
+      await service.beginReconnectGrace(initiator.socketId, t0);
+      await service.resume(initiator.identity, "s-init-2", at(5));
+
+      const ended = await service.expireReconnectGrace(
+        "m1",
+        "user:u1",
+        afterGrace,
+      );
+
+      expect(ended).toBeNull();
+      expect(await service.activeMatchFor(initiator.identity)).not.toBeNull();
+    });
+
+    it("does not expire before the deadline has actually passed", async () => {
+      const { service } = buildService();
+      await service.registerMatch(match(initiator, responder));
+      await service.beginReconnectGrace(initiator.socketId, t0);
+
+      const ended = await service.expireReconnectGrace("m1", "user:u1", at(5));
+
+      expect(ended).toBeNull();
+    });
+
+    it("only the same session can resume — a different identity cannot", async () => {
+      const { service } = buildService();
+      await service.registerMatch(match(initiator, responder));
+      await service.beginReconnectGrace(initiator.socketId, t0);
+
+      const result = await service.resume(user("intruder"), "s-evil", at(5));
+
+      expect(result).toEqual({ status: "no_active_match", ended: null });
+      // The genuine session can still resume afterwards.
+      const genuine = await service.resume(initiator.identity, "s-init-2", at(6));
+      expect(genuine.status).toBe("resumed");
+    });
+  });
+
   describe("typing (story 40)", () => {
     it("relays a typing toggle to the partner with the sender's frozen name", async () => {
       const resolver = stubResolver({ "user:u1": "Mellow Otter" });

@@ -6,15 +6,21 @@ import {
   WebSocketServer,
 } from "@nestjs/websockets";
 import type { Server, Socket } from "socket.io";
+import { productConfig } from "@fahhhchat/config";
 import { webOrigins } from "../cors-origins";
 import type { AuthenticatedSocketData } from "../realtime/realtime.gateway";
 import { ChatService } from "./chat.service";
 import {
   CHAT_EVENTS,
+  chatIdentityKey,
   type AckPayload,
   type ChatMessagePayload,
   type EndedMatch,
   type MatchEndedPayload,
+  type PartnerDisconnectedPayload,
+  type PartnerReconnectedPayload,
+  type ResumeFailedPayload,
+  type ResumedPayload,
   type SendFailedPayload,
   type SendMessagePayload,
   type TypingIndicatorPayload,
@@ -33,9 +39,11 @@ import {
  * the realtime contract — delivering {@link CHAT_EVENTS.message} to the partner
  * and acknowledging the sender with {@link CHAT_EVENTS.ack}, or telling the
  * sender why the send was refused with {@link CHAT_EVENTS.sendFailed}. On
- * disconnect it ends the sender's match and tells the partner the chat is over,
- * so no message is ever delivered after a match ends (story 43). All match/chat
- * decisions live in the service.
+ * disconnect it does *not* end a live match outright: it opens a short reconnect
+ * grace window (story 47) and arms a teardown timer, so a brief network blip
+ * doesn't kill the chat; if the same session reconnects and sends
+ * {@link CHAT_EVENTS.resume} in time, the match is restored. All match/chat
+ * decisions live in the service; the gateway only owns the in-process timers.
  */
 @WebSocketGateway({
   cors: { origin: webOrigins(), credentials: true },
@@ -45,6 +53,14 @@ export class ChatGateway implements OnGatewayDisconnect {
 
   @WebSocketServer()
   private readonly server!: Server;
+
+  /**
+   * Pending grace-window teardown timers, keyed by match + the disconnected
+   * participant. The timer fires the lapse once the grace window passes; a
+   * reconnect clears it first. In-process by nature — the store keeps the
+   * authoritative grace deadline so correctness never depends on a timer firing.
+   */
+  private readonly graceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(private readonly chat: ChatService) {}
 
@@ -134,19 +150,123 @@ export class ChatGateway implements OnGatewayDisconnect {
   }
 
   /**
-   * End the disconnecting socket's match, if it was in one, and tell the partner
-   * the chat is over. The matchmaking gateway separately frees any queue slot the
-   * same socket held; the two disconnect handlers are independent, so a socket
-   * that was mid-chat ends its match here while one only queued is a no-op.
+   * Handle a socket dropping. Instead of ending a live match outright, open a
+   * reconnect grace window (story 47): the partner is told to wait and a teardown
+   * timer is armed for when the window lapses. Only when there is no one to wait
+   * for (the partner was already away) does the match end now. The matchmaking
+   * gateway separately frees any queue slot the same socket held; the two
+   * disconnect handlers are independent, so a socket that was only queued is a
+   * no-op here.
    */
   async handleDisconnect(client: Socket): Promise<void> {
-    const ended = await this.chat.endMatchForSocket(
-      client.id,
-      "partner_disconnected",
+    const result = await this.chat.beginReconnectGrace(client.id);
+    if (result.status === "none") {
+      return;
+    }
+    if (result.status === "ended") {
+      this.notifyEnded(result.ended);
+      return;
+    }
+
+    // Held open for a reconnect: tell the partner to wait, and arm the teardown.
+    const notice: PartnerDisconnectedPayload = {
+      matchId: result.matchId,
+      graceSeconds: productConfig.reconnectGraceSeconds,
+    };
+    this.server
+      .to(result.partnerSocketId)
+      .emit(CHAT_EVENTS.partnerDisconnected, notice);
+    this.scheduleGraceTimeout(result.matchId, result.participantKey);
+    this.logger.debug(
+      `Match ${result.matchId} held for reconnect (${result.participantKey})`,
     );
+  }
+
+  /**
+   * Resume the match a freshly reconnected socket's session was in (story 47).
+   * The match is resolved from the socket's authenticated identity — never client
+   * input — so only the same session can return. On success the pending teardown
+   * timer is cancelled, the client is restored (role + recent buffer), and the
+   * partner is told their stranger is back; otherwise the client is told there is
+   * nothing to resume (and any lapsed match is reaped, notifying the partner).
+   */
+  @SubscribeMessage(CHAT_EVENTS.resume)
+  async handleResume(client: Socket): Promise<void> {
+    const identity = this.identityOf(client);
+    if (!identity) {
+      this.resumeFailed(client);
+      return;
+    }
+
+    const result = await this.chat.resume(identity, client.id);
+    if (result.status === "no_active_match") {
+      if (result.ended) {
+        this.notifyEnded(result.ended);
+      }
+      this.resumeFailed(client);
+      return;
+    }
+
+    this.clearGraceTimer(
+      this.graceTimerKey(result.matchId, chatIdentityKey(identity)),
+    );
+
+    const resumed: ResumedPayload = {
+      matchId: result.matchId,
+      role: result.role,
+      partnerConnected: result.partnerConnected,
+      buffer: result.buffer,
+    };
+    client.emit(CHAT_EVENTS.resumed, resumed);
+
+    if (result.partnerSocketId) {
+      const back: PartnerReconnectedPayload = { matchId: result.matchId };
+      this.server
+        .to(result.partnerSocketId)
+        .emit(CHAT_EVENTS.partnerReconnected, back);
+    }
+  }
+
+  /** Arm (replacing any prior) the teardown timer for a graced participant. */
+  private scheduleGraceTimeout(matchId: string, participantKey: string): void {
+    const key = this.graceTimerKey(matchId, participantKey);
+    this.clearGraceTimer(key);
+    const timer = setTimeout(() => {
+      void this.fireGraceTimeout(matchId, participantKey, key);
+    }, productConfig.reconnectGraceSeconds * 1000);
+    // A pending grace timer must not keep the process alive on its own.
+    timer.unref();
+    this.graceTimers.set(key, timer);
+  }
+
+  /** End a match whose grace window lapsed, and tell the remaining partner. */
+  private async fireGraceTimeout(
+    matchId: string,
+    participantKey: string,
+    key: string,
+  ): Promise<void> {
+    this.graceTimers.delete(key);
+    const ended = await this.chat.expireReconnectGrace(matchId, participantKey);
     if (ended) {
       this.notifyEnded(ended);
     }
+  }
+
+  private clearGraceTimer(key: string): void {
+    const timer = this.graceTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.graceTimers.delete(key);
+    }
+  }
+
+  private graceTimerKey(matchId: string, participantKey: string): string {
+    return `${matchId}::${participantKey}`;
+  }
+
+  private resumeFailed(client: Socket): void {
+    const payload: ResumeFailedPayload = { reason: "no_active_match" };
+    client.emit(CHAT_EVENTS.resumeFailed, payload);
   }
 
   /** Fan a match-ended notice out to whichever participant(s) remain connected. */

@@ -10,11 +10,13 @@ import {
   FALLBACK_DISPLAY_NAME,
   chatIdentityKey,
   type ActiveMatch,
+  type BeginReconnectGraceResult,
   type ChatMessage,
   type ChatStore,
   type DisplayNameResolver,
   type EndedMatch,
   type MatchEndReason,
+  type ResumeResult,
   type SendMessagePayload,
   type SendResult,
   type TypingResult,
@@ -74,12 +76,14 @@ export class ChatService {
           role: "initiator",
           socketId: match.initiator.socketId,
           displayName: initiatorName,
+          connected: true,
         },
         {
           identityKey: chatIdentityKey(match.responder.identity),
           role: "responder",
           socketId: match.responder.socketId,
           displayName: responderName,
+          connected: true,
         },
       ],
     };
@@ -207,6 +211,140 @@ export class ChatService {
   }
 
   /**
+   * Handle a socket dropping while in a match by opening a short same-session
+   * reconnect grace window instead of ending the chat outright (story 47). The
+   * dropped participant is marked disconnected with a deadline of
+   * {@link productConfig.reconnectGraceSeconds} from {@link now}; the match and
+   * its buffer stay alive so a returning socket can {@link resume}. Resolves to:
+   *
+   *   - `grace` — the partner is still here, so the match is held; the caller arms
+   *     a teardown timer and tells the partner to wait.
+   *   - `ended` — the partner was already away, so there is no one to hold the
+   *     chat open for and it is torn down immediately.
+   *   - `none` — the socket held no live match (only queued, or already gone).
+   *
+   * Story 48 (media expires immediately, even during text grace) is the deliberate
+   * exception to this grace: only text chat survives the window. Per-match media
+   * consent and pending camera media (issues #39+) are not built yet; when they
+   * are, their immediate teardown belongs here, *before* the text match is held.
+   */
+  async beginReconnectGrace(
+    socketId: string,
+    now: Date = new Date(),
+  ): Promise<BeginReconnectGraceResult> {
+    const graceExpiresAt = new Date(
+      now.getTime() + productConfig.reconnectGraceSeconds * 1000,
+    ).toISOString();
+    const mark = await this.store.markDisconnected(socketId, graceExpiresAt);
+    if (!mark) {
+      return { status: "none" };
+    }
+
+    if (!mark.partner.connected) {
+      // The partner is already away (mid-grace or gone): nobody is on the other
+      // side to wait for, so end now rather than holding an empty window open.
+      const ended = await this.endMatch(
+        mark.match.matchId,
+        "partner_disconnected",
+        socketId,
+      );
+      return ended ? { status: "ended", ended } : { status: "none" };
+    }
+
+    return {
+      status: "grace",
+      matchId: mark.match.matchId,
+      participantKey: mark.participantKey,
+      graceExpiresAt,
+      partnerSocketId: mark.partner.socketId,
+    };
+  }
+
+  /**
+   * Re-bind a reconnecting session to the match it briefly dropped out of (story
+   * 47). The match is resolved from the caller's *identity* — the same browser
+   * session, not the same socket — so a different user can never resume someone
+   * else's chat. Resolves to `resumed` (with the role, the recent buffer to
+   * repaint, and the partner's presence) when the match is still within grace, or
+   * `no_active_match` when there is nothing to resume; if the grace window had
+   * already lapsed, the lingering match is torn down here and the teardown is
+   * returned so the caller can also notify the partner.
+   */
+  async resume(
+    identity: RealtimeIdentity,
+    newSocketId: string,
+    now: Date = new Date(),
+  ): Promise<ResumeResult> {
+    const identityKey = chatIdentityKey(identity);
+    const match = await this.store.getMatchByIdentity(identityKey);
+    const self = match?.participants.find((p) => p.identityKey === identityKey);
+    if (!match || !self) {
+      return { status: "no_active_match", ended: null };
+    }
+
+    // A grace window that already elapsed leaves a zombie match the teardown timer
+    // hasn't reaped yet (e.g. a multi-instance node whose timer never fired). End
+    // it and refuse the resume rather than reviving a chat the partner has left.
+    if (
+      !self.connected &&
+      self.graceExpiresAt !== undefined &&
+      new Date(self.graceExpiresAt).getTime() <= now.getTime()
+    ) {
+      const ended = await this.endMatch(match.matchId, "timeout", newSocketId);
+      return { status: "no_active_match", ended };
+    }
+
+    const reattached = await this.store.reattach(identityKey, newSocketId);
+    const partner = reattached?.participants.find(
+      (p) => p.identityKey !== identityKey,
+    );
+    if (!reattached || !partner) {
+      return { status: "no_active_match", ended: null };
+    }
+
+    return {
+      status: "resumed",
+      matchId: reattached.matchId,
+      role: self.role,
+      buffer: await this.store.getBuffer(reattached.matchId),
+      partnerConnected: partner.connected,
+      partnerSocketId: partner.connected ? partner.socketId : null,
+    };
+  }
+
+  /**
+   * Tear down a match whose reconnect grace window has lapsed without the
+   * participant returning (story 47). A no-op — returning null — if the match is
+   * already gone, the participant reconnected (so is now `connected`), or the
+   * deadline has not actually passed yet, so a stale or early timer firing can
+   * never end a healthy chat. On a genuine lapse the match ends with `timeout` and
+   * the still-present partner is reported for notification.
+   */
+  async expireReconnectGrace(
+    matchId: string,
+    participantKey: string,
+    now: Date = new Date(),
+  ): Promise<EndedMatch | null> {
+    const match = await this.store.getMatchByIdentity(participantKey);
+    if (!match || match.matchId !== matchId) {
+      return null;
+    }
+    const participant = match.participants.find(
+      (p) => p.identityKey === participantKey,
+    );
+    if (!participant || participant.connected) {
+      return null;
+    }
+    if (
+      participant.graceExpiresAt !== undefined &&
+      new Date(participant.graceExpiresAt).getTime() > now.getTime()
+    ) {
+      return null;
+    }
+    return this.endMatch(matchId, "timeout");
+  }
+
+  /**
    * End the match a disconnecting socket belonged to, if any. Drops the match and
    * its buffer (so no further sends route and history is gone) and reports which
    * *other* sockets remain to be told the chat is over. Returns null when the
@@ -239,9 +377,12 @@ export class ChatService {
     if (!removed) {
       return null;
     }
+    // Notify only participants who are still connected and aren't the socket that
+    // triggered the end. A participant inside the reconnect grace window (story 47)
+    // has a dead socket, so there's no point — and no way — to reach them.
     const notifySocketIds = removed.participants
-      .map((p) => p.socketId)
-      .filter((socketId) => socketId !== excludeSocketId);
+      .filter((p) => p.connected && p.socketId !== excludeSocketId)
+      .map((p) => p.socketId);
     return { matchId, reason, notifySocketIds };
   }
 
