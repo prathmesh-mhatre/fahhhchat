@@ -522,3 +522,22 @@ export function resolveAvatarSelection(
   }
   return null;
 }
+
+/**
+ * Deterministic moderation rule engine (issue #31). Shared here because its
+ * lexicon and severity contract must agree across the API (which moderates
+ * realtime chat) and the identity layer (which moderates usernames, story 18),
+ * so the rules live in exactly one place rather than being duplicated per
+ * surface. Re-exported from the package root so consumers import everything from
+ * `@fahhhchat/config`.
+ */
+export {
+  moderateText,
+  moderateUsername,
+  severityAtLeast,
+  type ModerationCategory,
+  type ModerationSeverity,
+  type ModerationMatch,
+  type ModerationResult,
+  type UsernameRejectionCode,
+} from "./moderation";
