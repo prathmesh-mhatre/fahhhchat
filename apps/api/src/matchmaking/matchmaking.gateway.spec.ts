@@ -72,11 +72,15 @@ function buildGateway(disabled: Array<"queue_entry" | "gender_filters"> = []) {
   // over an in-memory store lets the test assert the active match was created.
   // A trivial resolver stands in for the auth/session name lookup the chat layer
   // does at registration (typing indicators) — match routing here is name-agnostic.
-  const chat = new ChatService(new InMemoryChatStore(), {
-    async resolve() {
-      return "Stranger";
+  const chat = new ChatService(
+    new InMemoryChatStore(),
+    {
+      async resolve() {
+        return "Stranger";
+      },
     },
-  });
+    rateLimits,
+  );
   const gateway = new MatchmakingGateway(service, auth, chat);
   const { server, delivered } = fakeServer();
   (gateway as unknown as { server: Server }).server = server;

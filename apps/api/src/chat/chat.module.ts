@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
+import { RateLimitModule } from "../rate-limit/rate-limit.module";
 import { SessionModule } from "../session/session.module";
 import { ChatGateway } from "./chat.gateway";
 import { ChatService } from "./chat.service";
@@ -41,9 +42,12 @@ function createChatStore(): ChatStore {
  * {@link IdentityDisplayNameResolver} can read each matched user's generated
  * display name (logged-in account or guest session) for typing indicators (issue
  * #22, story 40) — captured once at match registration, never client-asserted.
+ * Imports {@link RateLimitModule} so {@link ChatService} can meter URL-bearing
+ * messages against the per-identity `chat_link` budget for link-spam control
+ * (issue #24, story 45).
  */
 @Module({
-  imports: [AuthModule, SessionModule],
+  imports: [AuthModule, SessionModule, RateLimitModule],
   providers: [
     ChatService,
     ChatGateway,

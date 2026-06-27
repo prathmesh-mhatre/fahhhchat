@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
-import { productConfig } from "@fahhhchat/config";
+import { containsUrlLike, productConfig } from "@fahhhchat/config";
+import { RateLimitService } from "../rate-limit/rate-limit.service";
 import type { Match } from "../matchmaking/matchmaking.types";
 import type { RealtimeIdentity } from "../realtime/realtime.types";
 import {
@@ -46,6 +47,7 @@ export class ChatService {
     @Inject(CHAT_STORE) private readonly store: ChatStore,
     @Inject(DISPLAY_NAME_RESOLVER)
     private readonly displayNames: DisplayNameResolver,
+    private readonly rateLimits: RateLimitService,
   ) {}
 
   /**
@@ -96,10 +98,19 @@ export class ChatService {
    * Attempt to send a message from {@link identity} in their current match.
    * Resolves to `delivered` (with the stamped message and the recipient socket),
    * `no_active_match` when the sender is not in a live match (the story-43
-   * guardrail), or `invalid` when the text is empty or over
-   * {@link productConfig.chatMessageMaxLength}. The text is trimmed before both
-   * validation and delivery so trailing whitespace can't smuggle past the length
-   * bound or turn a blank message into a "non-empty" one.
+   * guardrail), `invalid` when the text is empty or over
+   * {@link productConfig.chatMessageMaxLength}, or `spam` when the message is
+   * URL-like and the sender has exhausted their link budget (story 45). The text
+   * is trimmed before validation, the spam check, and delivery so trailing
+   * whitespace can't smuggle past the length bound or turn a blank message into a
+   * "non-empty" one.
+   *
+   * The link-spam check runs *only* for URL-bearing messages and *after* the
+   * cheap validation, so an ordinary message never touches the `chat_link`
+   * counter and a malformed one is rejected on its own terms first. URLs are
+   * never rewritten or stripped — the message still carries its plain text
+   * through to delivery, where the recipient renders it as inert text (story 44);
+   * the budget only gates *how many* link messages a sender may fire in a window.
    */
   async send(
     identity: RealtimeIdentity,
@@ -118,6 +129,17 @@ export class ChatService {
     }
     if (text.length > productConfig.chatMessageMaxLength) {
       return { status: "invalid", reason: "too_long" };
+    }
+
+    // Spam control (story 45): a URL-bearing message counts against the sender's
+    // link budget. Only link messages are metered, so ordinary chat is never
+    // throttled; once the budget is spent the message is refused rather than
+    // delivered, and the sender is told how long until a link will go through.
+    if (containsUrlLike(text)) {
+      const decision = await this.rateLimits.consume("chat_link", identity, now);
+      if (!decision.allowed) {
+        return { status: "spam", retryAfterSeconds: decision.retryAfterSeconds };
+      }
     }
 
     const sender = match.participants.find((p) => p.identityKey === senderKey);

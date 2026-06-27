@@ -1,9 +1,12 @@
 import type { Server, Socket } from "socket.io";
+import { rateLimits } from "@fahhhchat/config";
 import type {
   Match,
   QueuedParticipant,
 } from "../matchmaking/matchmaking.types";
 import type { RealtimeIdentity } from "../realtime/realtime.types";
+import { InMemoryRateLimitStore } from "../rate-limit/in-memory-rate-limit.store";
+import { RateLimitService } from "../rate-limit/rate-limit.service";
 import { ChatGateway } from "./chat.gateway";
 import { ChatService } from "./chat.service";
 import { CHAT_EVENTS, type DisplayNameResolver } from "./chat.types";
@@ -69,7 +72,8 @@ const resolver: DisplayNameResolver = {
 };
 
 function buildGateway() {
-  const chat = new ChatService(new InMemoryChatStore(), resolver);
+  const rateLimits = new RateLimitService(new InMemoryRateLimitStore());
+  const chat = new ChatService(new InMemoryChatStore(), resolver, rateLimits);
   const gateway = new ChatGateway(chat);
   const { server, delivered } = fakeServer();
   (gateway as unknown as { server: Server }).server = server;
@@ -167,6 +171,27 @@ describe("ChatGateway", () => {
     expect(sender.emitted).toContainEqual({
       event: CHAT_EVENTS.sendFailed,
       payload: { clientMessageId: "c-2", reason: "empty" },
+    });
+  });
+
+  it("tells the sender a link flood was refused as spam (story 45)", async () => {
+    const { gateway, chat } = buildGateway();
+    await seedMatch(chat);
+    // RESPONDER is a guest; spend its link budget, then send one more link.
+    const sender = fakeSocket(RESPONDER.socketId, RESPONDER.identity);
+
+    const budget = rateLimits.chat_link.guest.limit;
+    for (let i = 0; i <= budget; i += 1) {
+      await gateway.handleSend(sender.socket, {
+        text: `link ${i} spam.example.com`,
+        clientMessageId: `c-${i}`,
+      });
+    }
+
+    const lastId = `c-${budget}`;
+    expect(sender.emitted).toContainEqual({
+      event: CHAT_EVENTS.sendFailed,
+      payload: { clientMessageId: lastId, reason: "spam" },
     });
   });
 

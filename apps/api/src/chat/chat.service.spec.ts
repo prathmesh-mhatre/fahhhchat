@@ -1,9 +1,11 @@
-import { productConfig } from "@fahhhchat/config";
+import { productConfig, rateLimits } from "@fahhhchat/config";
 import type {
   Match,
   QueuedParticipant,
 } from "../matchmaking/matchmaking.types";
 import type { RealtimeIdentity } from "../realtime/realtime.types";
+import { InMemoryRateLimitStore } from "../rate-limit/in-memory-rate-limit.store";
+import { RateLimitService } from "../rate-limit/rate-limit.service";
 import { ChatService } from "./chat.service";
 import type { DisplayNameResolver } from "./chat.types";
 import { InMemoryChatStore } from "./in-memory-chat.store";
@@ -57,8 +59,9 @@ function match(
 }
 
 function buildService(resolver: DisplayNameResolver = stubResolver()) {
-  const service = new ChatService(new InMemoryChatStore(), resolver);
-  return { service };
+  const rateLimits = new RateLimitService(new InMemoryRateLimitStore());
+  const service = new ChatService(new InMemoryChatStore(), resolver, rateLimits);
+  return { service, rateLimits };
 }
 
 describe("ChatService", () => {
@@ -159,6 +162,102 @@ describe("ChatService", () => {
       });
 
       expect(result).toEqual({ status: "no_active_match" });
+    });
+  });
+
+  describe("link-spam control (story 45)", () => {
+    // The guest tier's chat_link budget; the responder (g1) is a guest.
+    const guestLinkLimit = rateLimits.chat_link.guest.limit;
+    const now = new Date("2026-06-26T12:00:00.000Z");
+
+    it("delivers a URL-bearing message while under the link budget", async () => {
+      const { service } = buildService();
+      await service.registerMatch(match(initiator, responder));
+
+      const result = await service.send(
+        responder.identity,
+        { text: "check https://example.com out" },
+        now,
+      );
+
+      // The link is delivered verbatim — URLs are never stripped or rewritten;
+      // the recipient renders them as inert text (story 44).
+      expect(result.status).toBe("delivered");
+      if (result.status !== "delivered") return;
+      expect(result.message.text).toBe("check https://example.com out");
+    });
+
+    it("refuses a URL-bearing message once the sender exhausts the link budget", async () => {
+      const { service } = buildService();
+      await service.registerMatch(match(initiator, responder));
+
+      // Spend the whole budget on link messages; each is delivered.
+      for (let i = 0; i < guestLinkLimit; i += 1) {
+        const ok = await service.send(
+          responder.identity,
+          { text: `link ${i} spam.example.com` },
+          now,
+        );
+        expect(ok.status).toBe("delivered");
+      }
+
+      // The next link message is refused as spam, with a wait hint.
+      const blocked = await service.send(
+        responder.identity,
+        { text: "one more evil.example.com" },
+        now,
+      );
+
+      expect(blocked.status).toBe("spam");
+      if (blocked.status !== "spam") return;
+      expect(blocked.retryAfterSeconds).toBeGreaterThan(0);
+      // A refused message is never buffered or delivered.
+      const buffer = await service.buffer("m1");
+      expect(buffer.every((m) => !m.text.includes("one more"))).toBe(true);
+    });
+
+    it("never throttles ordinary (link-free) messages, even after the budget is spent", async () => {
+      const { service } = buildService();
+      await service.registerMatch(match(initiator, responder));
+
+      // Exhaust the link budget...
+      for (let i = 0; i <= guestLinkLimit; i += 1) {
+        await service.send(
+          responder.identity,
+          { text: `spam ${i} bad.example.com` },
+          now,
+        );
+      }
+
+      // ...a plain message still goes through: only link-bearing sends are metered.
+      const plain = await service.send(
+        responder.identity,
+        { text: "just talking, no links here" },
+        now,
+      );
+      expect(plain.status).toBe("delivered");
+    });
+
+    it("meters each sender's link budget independently", async () => {
+      const { service } = buildService();
+      await service.registerMatch(match(initiator, responder));
+
+      // The guest responder spends its entire budget...
+      for (let i = 0; i <= guestLinkLimit; i += 1) {
+        await service.send(
+          responder.identity,
+          { text: `r ${i} bad.example.com` },
+          now,
+        );
+      }
+
+      // ...which must not spill onto the initiator's separate budget.
+      const fromInitiator = await service.send(
+        initiator.identity,
+        { text: "my first link example.com" },
+        now,
+      );
+      expect(fromInitiator.status).toBe("delivered");
     });
   });
 
@@ -283,7 +382,11 @@ describe("ChatService", () => {
 
   it("keeps the buffer bounded to the rolling window", async () => {
     // A tiny buffer makes the cap observable without sending hundreds of messages.
-    const service = new ChatService(new InMemoryChatStore(3), stubResolver());
+    const service = new ChatService(
+      new InMemoryChatStore(3),
+      stubResolver(),
+      new RateLimitService(new InMemoryRateLimitStore()),
+    );
     const created = match(initiator, responder);
     await service.registerMatch(created);
 

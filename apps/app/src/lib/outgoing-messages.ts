@@ -30,9 +30,10 @@
  * - `undelivered` — terminal: the match ended before the message was delivered,
  *   so it will never be sent and **must not be retried** (story 43).
  * - `rejected` — terminal: the server refused the message as malformed (empty or
- *   over the length bound). Retrying the same text cannot help — the sender must
- *   edit and send anew — so it is not offered a retry, and unlike `undelivered`
- *   it does not imply the match is over.
+ *   over the length bound) or as link spam (story 45). Re-sending the identical
+ *   text immediately cannot help — the sender must edit, or slow down and send
+ *   anew — so it is not offered an automatic retry, and unlike `undelivered` it
+ *   does not imply the match is over.
  */
 export type OutgoingMessageStatus =
   | "sending"
@@ -48,9 +49,16 @@ export type OutgoingMessageStatus =
  * `timeout` is the client-only case where no acknowledgement arrived in time (a
  * dropped socket or a slow network) — the temporary delivery issue story 42 is
  * about, and the one that yields a retryable `failed` rather than a terminal
- * state.
+ * state. `spam` mirrors the server's link-flood refusal (story 45): the match is
+ * still live, but the message was URL-like and over the sender's link budget, so
+ * it settles `rejected` (slow down) rather than retryable `failed`.
  */
-export type SendFailureReason = "timeout" | "match_ended" | "empty" | "too_long";
+export type SendFailureReason =
+  | "timeout"
+  | "match_ended"
+  | "empty"
+  | "too_long"
+  | "spam";
 
 /** One outgoing message tracked through its lifecycle. */
 export interface OutgoingMessage {
@@ -140,8 +148,9 @@ export class OutgoingMessageTracker {
    *     (story 43).
    *   - any failure once the match has ended → `undelivered`, never `failed`, so
    *     a stale timeout can't reopen a retry after the chat is gone (story 43).
-   *   - `empty` / `too_long` → `rejected` (terminal; the text must be edited, so
-   *     no retry is offered, but the match may still be live).
+   *   - `empty` / `too_long` / `spam` → `rejected` (terminal; the text must be
+   *     edited or the sender must slow down, so no automatic retry is offered,
+   *     but the match may still be live — story 45 for `spam`).
    *
    * An already-`sent` message is left untouched — a spurious late failure cannot
    * undo a confirmed delivery.
@@ -167,7 +176,8 @@ export class OutgoingMessageTracker {
     if (reason === "timeout") {
       message.status = "failed";
     } else {
-      // empty / too_long: malformed, so retrying the same text is pointless.
+      // empty / too_long / spam: re-sending the identical text immediately is
+      // pointless (it's malformed, or over the link budget), so no auto-retry.
       message.status = "rejected";
     }
     message.failureReason = reason;
