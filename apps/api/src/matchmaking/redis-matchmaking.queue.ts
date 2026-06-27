@@ -32,7 +32,8 @@ const PARTICIPANTS_KEY = "matchmaking:participants";
  * KEYS[1]=order list (head = oldest), KEYS[2]=participants hash.
  * ARGV: [1]=excludeKey, [2]=language, [3]=now (ms), [4]=relaxAfterMs,
  *       [5]=genderFilteringEnabled ("1"/"0"), [6]=gender, [7]=genderFilter,
- *       [8]=genderRelaxAfterMs.
+ *       [8]=genderRelaxAfterMs, [9]=excludeKeys (JSON array of identity keys the
+ *       joiner is under a rematch-prevention window with — issue #27).
  */
 const TAKE_MATCH = `
 local order = KEYS[1]
@@ -45,11 +46,19 @@ local genderFiltering = ARGV[5] == '1'
 local gender = ARGV[6]
 local genderFilter = ARGV[7]
 local genderRelaxAfter = tonumber(ARGV[8])
+-- Rematch-prevention exclusions (issue #27): a Lua set for O(1) skip per
+-- candidate. cjson.decode('[]') yields an empty table, so no-exclusion joins add
+-- nothing to skip and ordinary matching is unaffected.
+local excludedSet = {}
+local excludedList = cjson.decode(ARGV[9])
+for _, k in ipairs(excludedList) do
+  excludedSet[k] = true
+end
 local len = redis.call('LLEN', order)
 local fallbackKey = false
 for i = 0, len - 1 do
   local key = redis.call('LINDEX', order, i)
-  if key ~= exclude then
+  if key ~= exclude and not excludedSet[key] then
     local data = redis.call('HGET', participants, key)
     if data then
       local p = cjson.decode(data)
@@ -139,7 +148,10 @@ export class RedisMatchmakingQueue implements MatchmakingQueue {
       // defined and never satisfies a Male/Female filter.
       criteria.gender ?? "",
       criteria.genderFilter,
-      String(criteria.genderRelaxAfterMs)
+      String(criteria.genderRelaxAfterMs),
+      // Serialized as JSON so the Lua side can cjson.decode it into a skip set;
+      // an empty list (the common case) decodes to an empty table.
+      JSON.stringify(criteria.excludeKeys ?? [])
     )) as string | null;
     return data ? (JSON.parse(data) as QueuedParticipant) : null;
   }

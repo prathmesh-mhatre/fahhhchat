@@ -3,6 +3,7 @@ import { AuthModule } from "../auth/auth.module";
 import { ChatModule } from "../chat/chat.module";
 import { FeatureFlagsModule } from "../feature-flags/feature-flags.module";
 import { RateLimitModule } from "../rate-limit/rate-limit.module";
+import { RematchModule } from "../rematch/rematch.module";
 import { InMemoryMatchmakingQueue } from "./in-memory-matchmaking.queue";
 import { MatchmakingController } from "./matchmaking.controller";
 import { MatchmakingGateway } from "./matchmaking.gateway";
@@ -37,9 +38,18 @@ function createMatchmakingQueue(): MatchmakingQueue {
  * with the chat layer the instant a pair is created (issue #21). The gateway
  * shares the Socket.IO server stood up by the realtime slice; no extra wiring is
  * needed because Nest attaches every gateway on the same port to one server.
+ * Imports {@link RematchModule} so a joiner is never paired with a stranger they
+ * reported-with-block or blocked while the rematch-prevention window holds (issue
+ * #27, stories 53-54).
  */
 @Module({
-  imports: [FeatureFlagsModule, AuthModule, RateLimitModule, ChatModule],
+  imports: [
+    FeatureFlagsModule,
+    AuthModule,
+    RateLimitModule,
+    ChatModule,
+    RematchModule,
+  ],
   controllers: [MatchmakingController],
   providers: [
     MatchmakingService,

@@ -6,6 +6,8 @@ import type {
 import type { RealtimeIdentity } from "../realtime/realtime.types";
 import { InMemoryRateLimitStore } from "../rate-limit/in-memory-rate-limit.store";
 import { RateLimitService } from "../rate-limit/rate-limit.service";
+import { InMemoryRematchGuardStore } from "../rematch/in-memory-rematch-guard.store";
+import { RematchGuardService } from "../rematch/rematch-guard.service";
 import { ChatService } from "./chat.service";
 import type { DisplayNameResolver } from "./chat.types";
 import { InMemoryChatStore } from "./in-memory-chat.store";
@@ -60,8 +62,14 @@ function match(
 
 function buildService(resolver: DisplayNameResolver = stubResolver()) {
   const rateLimits = new RateLimitService(new InMemoryRateLimitStore());
-  const service = new ChatService(new InMemoryChatStore(), resolver, rateLimits);
-  return { service, rateLimits };
+  const rematchGuard = new RematchGuardService(new InMemoryRematchGuardStore());
+  const service = new ChatService(
+    new InMemoryChatStore(),
+    resolver,
+    rateLimits,
+    rematchGuard,
+  );
+  return { service, rateLimits, rematchGuard };
 }
 
 describe("ChatService", () => {
@@ -368,6 +376,86 @@ describe("ChatService", () => {
     });
   });
 
+  describe("report and block (issue #27, stories 52-56)", () => {
+    const initiatorKey = "user:u1";
+    const responderKey = "guest:g1";
+
+    it("reporting ends the match with reason `report` and notifies only the partner (story 52)", async () => {
+      const { service } = buildService();
+      await service.registerMatch(match(initiator, responder));
+
+      const ended = await service.reportMatch(initiator.identity, true);
+
+      expect(ended?.reason).toBe("report");
+      // The reporter's own socket is excluded — like Next, their client already
+      // transitioned — so only the stranger is told the chat ended.
+      expect(ended?.notifySocketIds).toEqual([responder.socketId]);
+      // And the match is torn down so no further send routes.
+      expect(await service.activeMatchFor(initiator.identity)).toBeNull();
+      expect(await service.activeMatchFor(responder.identity)).toBeNull();
+    });
+
+    it("blocking ends the match with reason `block` and notifies only the partner (story 53)", async () => {
+      const { service } = buildService();
+      await service.registerMatch(match(initiator, responder));
+
+      const ended = await service.blockMatch(responder.identity);
+
+      expect(ended?.reason).toBe("block");
+      expect(ended?.notifySocketIds).toEqual([initiator.socketId]);
+    });
+
+    it("reporting with also-block records a mutual rematch-prevention block (stories 54, 56)", async () => {
+      const { service, rematchGuard } = buildService();
+      await service.registerMatch(match(initiator, responder));
+
+      await service.reportMatch(initiator.identity, true);
+
+      // Mutual: each side now excludes the other, regardless of who later joins.
+      expect(await rematchGuard.excludedKeysFor(initiatorKey)).toEqual([
+        responderKey,
+      ]);
+      expect(await rematchGuard.excludedKeysFor(responderKey)).toEqual([
+        initiatorKey,
+      ]);
+    });
+
+    it("reporting *without* also-block ends the match but records no exclusion (story 56)", async () => {
+      const { service, rematchGuard } = buildService();
+      await service.registerMatch(match(initiator, responder));
+
+      const ended = await service.reportMatch(initiator.identity, false);
+
+      expect(ended?.reason).toBe("report");
+      // No block requested, so the two can be paired again immediately.
+      expect(await rematchGuard.excludedKeysFor(initiatorKey)).toEqual([]);
+      expect(await rematchGuard.excludedKeysFor(responderKey)).toEqual([]);
+    });
+
+    it("blocking always records the rematch-prevention block (story 54)", async () => {
+      const { service, rematchGuard } = buildService();
+      await service.registerMatch(match(initiator, responder));
+
+      await service.blockMatch(initiator.identity);
+
+      expect(await rematchGuard.excludedKeysFor(initiatorKey)).toEqual([
+        responderKey,
+      ]);
+      expect(await rematchGuard.excludedKeysFor(responderKey)).toEqual([
+        initiatorKey,
+      ]);
+    });
+
+    it("are no-ops when the caller is not in a live match", async () => {
+      const { service, rematchGuard } = buildService();
+
+      expect(await service.reportMatch(initiator.identity, true)).toBeNull();
+      expect(await service.blockMatch(initiator.identity)).toBeNull();
+      // Nothing recorded, since there was no partner to block.
+      expect(await rematchGuard.excludedKeysFor(initiatorKey)).toEqual([]);
+    });
+  });
+
   describe("reconnect grace (story 47)", () => {
     const t0 = new Date("2026-06-26T12:00:00.000Z");
     /** A time `seconds` after t0. */
@@ -589,6 +677,7 @@ describe("ChatService", () => {
       new InMemoryChatStore(3),
       stubResolver(),
       new RateLimitService(new InMemoryRateLimitStore()),
+      new RematchGuardService(new InMemoryRematchGuardStore()),
     );
     const created = match(initiator, responder);
     await service.registerMatch(created);

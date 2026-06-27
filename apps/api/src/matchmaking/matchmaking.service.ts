@@ -7,6 +7,7 @@ import {
 } from "@fahhhchat/config";
 import { FeatureFlagsService } from "../feature-flags/feature-flags.service";
 import { RateLimitService } from "../rate-limit/rate-limit.service";
+import { RematchGuardService } from "../rematch/rematch-guard.service";
 import type { RealtimeIdentity } from "../realtime/realtime.types";
 import {
   MATCHMAKING_QUEUE,
@@ -55,7 +56,8 @@ export class MatchmakingService {
   constructor(
     @Inject(MATCHMAKING_QUEUE) private readonly queue: MatchmakingQueue,
     private readonly flags: FeatureFlagsService,
-    private readonly rateLimits: RateLimitService
+    private readonly rateLimits: RateLimitService,
+    private readonly rematchGuard: RematchGuardService
   ) {}
 
   /**
@@ -117,12 +119,19 @@ export class MatchmakingService {
       genderFilter,
     };
 
+    // Strangers this joiner must not be paired with right now: anyone they
+    // reported-with-block or blocked, and anyone who did so to them (issue #27,
+    // stories 53-54). Usually empty, so ordinary matching is unaffected.
+    const excludeKeys = await this.rematchGuard.excludedKeysFor(key, now);
+
     // Pair with the best available *other* user under staged language + gender
     // relaxation. Excluding our own key means a duplicate join (e.g. a second
     // tab) can never match a user with themselves — they just refresh their
-    // single waiting slot below.
+    // single waiting slot below; excludeKeys additionally skips rematch-blocked
+    // strangers so a safety action keeps the two apart.
     const partner = await this.queue.takeMatch({
       excludeKey: key,
+      excludeKeys,
       language,
       now: now.getTime(),
       relaxAfterMs: productConfig.languageRelaxAfterSeconds * 1000,

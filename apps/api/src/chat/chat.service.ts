@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import { containsUrlLike, productConfig } from "@fahhhchat/config";
 import { RateLimitService } from "../rate-limit/rate-limit.service";
+import { RematchGuardService } from "../rematch/rematch-guard.service";
 import type { Match } from "../matchmaking/matchmaking.types";
 import type { RealtimeIdentity } from "../realtime/realtime.types";
 import {
@@ -50,6 +51,7 @@ export class ChatService {
     @Inject(DISPLAY_NAME_RESOLVER)
     private readonly displayNames: DisplayNameResolver,
     private readonly rateLimits: RateLimitService,
+    private readonly rematchGuard: RematchGuardService,
   ) {}
 
   /**
@@ -380,6 +382,87 @@ export class ChatService {
     }
     const caller = match.participants.find((p) => p.identityKey === callerKey);
     return this.endMatch(match.matchId, "next", caller?.socketId);
+  }
+
+  /**
+   * Report the stranger the caller is matched with, ending the match (issue #27,
+   * stories 52, 55-56). Reporting immediately and permanently closes the match so
+   * the caller can leave an unsafe interaction; when {@link alsoBlock} is set (the
+   * default — story 56), it also records a rematch-prevention block so the two are
+   * not paired again right away (story 54). The match is resolved from the
+   * caller's *identity*, never client input, so a user can only report their own
+   * current chat. The block is recorded *before* the match is torn down because
+   * teardown drops the participant records the partner's identity key is read
+   * from. Like {@link nextMatch}, the caller's own socket is excluded from the
+   * notify list (their client already transitioned), so only the partner is told
+   * the chat ended — with reason `report`, which the client renders as a neutral
+   * end, never "you were reported". A no-op returning null when the caller is not
+   * in a live match, keeping a double-report or a report racing a disconnect safe.
+   *
+   * Filing the report record itself (categories, details, surrounding context,
+   * case creation, trust weighting) is deferred to issues #28-30; this slice owns
+   * only the termination + also-block half (stories 52, 54-56).
+   */
+  async reportMatch(
+    identity: RealtimeIdentity,
+    alsoBlock: boolean,
+    now: Date = new Date(),
+  ): Promise<EndedMatch | null> {
+    return this.endSafetyMatch(identity, "report", alsoBlock, now);
+  }
+
+  /**
+   * Block the stranger the caller is matched with, ending the match (issue #27,
+   * stories 53-55). A separate control from {@link reportMatch} (story 55):
+   * blocking immediately closes the match (story 53) and always records a
+   * rematch-prevention block so the two are not paired again right away (story
+   * 54), but files no report. Resolved from the caller's identity and notified
+   * exactly like report (partner-only, neutral). A no-op returning null when the
+   * caller is not in a live match.
+   */
+  async blockMatch(
+    identity: RealtimeIdentity,
+    now: Date = new Date(),
+  ): Promise<EndedMatch | null> {
+    return this.endSafetyMatch(identity, "block", true, now);
+  }
+
+  /**
+   * Shared body of {@link reportMatch} and {@link blockMatch}: resolve the
+   * caller's live match, optionally record the mutual rematch-prevention block
+   * between the two participants (stories 53-54), then tear the match down with
+   * the given safety {@link reason} and report the partner for notification. The
+   * partner's identity key is captured before {@link endMatch} runs, since
+   * teardown removes the participant records. Returns null when the caller holds
+   * no live match.
+   */
+  private async endSafetyMatch(
+    identity: RealtimeIdentity,
+    reason: "report" | "block",
+    block: boolean,
+    now: Date,
+  ): Promise<EndedMatch | null> {
+    const callerKey = chatIdentityKey(identity);
+    const match = await this.store.getMatchByIdentity(callerKey);
+    if (!match) {
+      return null;
+    }
+    const caller = match.participants.find((p) => p.identityKey === callerKey);
+    const partner = match.participants.find(
+      (p) => p.identityKey !== callerKey,
+    );
+
+    if (block && partner) {
+      // Record the mutual exclusion before teardown drops the participant records
+      // (stories 53-54). Mutual, so a later join from either side skips the other.
+      await this.rematchGuard.preventRematch(
+        callerKey,
+        partner.identityKey,
+        now,
+      );
+    }
+
+    return this.endMatch(match.matchId, reason, caller?.socketId);
   }
 
   /**

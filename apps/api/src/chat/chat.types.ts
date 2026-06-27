@@ -113,10 +113,19 @@ export type SendInvalidReason = "empty" | "too_long";
  * (story 47). `next` is a *deliberate* end: the partner confirmed the two-step
  * Next control and moved on (issue #26, stories 49-51) — distinct from a drop so
  * the remaining user can be told the stranger left rather than "reconnecting…".
- * The other deliberate ends — report, block — are added by their own later slice
- * (#27) but share this event so the client handles match-end uniformly.
+ * `report` and `block` are the safety ends (issue #27, stories 52-53): the
+ * partner reported or blocked, which immediately closes the match. They share
+ * this event so the client handles match-end uniformly; the remaining user is
+ * shown the same neutral "the stranger left" state as `next` — they are never
+ * told they were reported or blocked, so the reason is for the server /
+ * notified-side contract, not a signal to surface to the person on the other end.
  */
-export type MatchEndReason = "partner_disconnected" | "timeout" | "next";
+export type MatchEndReason =
+  | "partner_disconnected"
+  | "timeout"
+  | "next"
+  | "report"
+  | "block";
 
 /** The result of ending a match: who to notify, or null if it was already gone. */
 export interface EndedMatch {
@@ -280,6 +289,30 @@ export const CHAT_EVENTS = {
    * rapid-Next cooldown beyond the two-step (story 145) — Next stays fluid.
    */
   next: "match:next",
+  /**
+   * Client → server: the user **reported** the stranger they are matched with
+   * (issue #27, stories 52, 55-56). Reporting immediately and permanently ends
+   * the current match so the reporter can leave an unsafe interaction (story 52),
+   * and — when the request's {@link ReportMatchPayload.alsoBlock} is set (the
+   * default, story 56) — also records a rematch-prevention block so the reporter
+   * is not paired with that stranger again right away (story 54). The match is
+   * resolved from the socket's authenticated identity, never client input. The
+   * report *form* itself (categories, optional details, context capture, case
+   * creation) is deferred to issues #28-30; this event carries only the
+   * termination + also-block decision. Like Next there is no ack and no requeue
+   * event — the reporter's client transitions on its own and re-joins via the
+   * matchmaking path if the user chooses to keep chatting.
+   */
+  report: "match:report",
+  /**
+   * Client → server: the user **blocked** the stranger they are matched with
+   * (issue #27, stories 53-55). A separate control from {@link report} (story
+   * 55): blocking immediately ends the current match (story 53) and records a
+   * rematch-prevention block so the two are not paired again right away (story
+   * 54), but files no report. Resolved from the socket's authenticated identity;
+   * no ack, mirroring Next/report.
+   */
+  block: "match:block",
   /** Server → remaining participant(s): the match ended; chat is over. */
   matchEnded: "match:ended",
   /**
@@ -322,6 +355,21 @@ export const CHAT_EVENTS = {
 export interface SendMessagePayload {
   text: string;
   clientMessageId?: string;
+}
+
+/**
+ * Client → server payload for {@link CHAT_EVENTS.report}. The only decision the
+ * client makes here is whether to *also block* the reported stranger (story 56);
+ * everything else about the report (who, which match) is resolved server-side
+ * from the authenticated socket. {@link alsoBlock} is optional so a minimal
+ * client can omit it and still get the protective default
+ * ({@link import("@fahhhchat/config").reportDefaultsAlsoBlock}, currently on) —
+ * the server treats an absent flag as the default rather than as "do not block".
+ * The report categories/details land in issue #28, so this payload stays minimal.
+ */
+export interface ReportMatchPayload {
+  /** Whether to also block (prevent immediate rematch). Defaults to on (story 56). */
+  alsoBlock?: boolean;
 }
 
 /** Server → sender payload acknowledging a delivered message. */

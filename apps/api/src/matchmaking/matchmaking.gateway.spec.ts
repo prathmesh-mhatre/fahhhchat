@@ -9,6 +9,8 @@ import { InMemoryFeatureFlagStore } from "../feature-flags/in-memory-feature-fla
 import { InMemoryFeatureFlagAuditLog } from "../feature-flags/in-memory-feature-flag-audit.log";
 import { InMemoryRateLimitStore } from "../rate-limit/in-memory-rate-limit.store";
 import { RateLimitService } from "../rate-limit/rate-limit.service";
+import { InMemoryRematchGuardStore } from "../rematch/in-memory-rematch-guard.store";
+import { RematchGuardService } from "../rematch/rematch-guard.service";
 import { InMemoryMatchmakingQueue } from "./in-memory-matchmaking.queue";
 import { MatchmakingGateway } from "./matchmaking.gateway";
 import { MatchmakingService } from "./matchmaking.service";
@@ -59,10 +61,15 @@ function buildGateway(disabled: Array<"queue_entry" | "gender_filters"> = []) {
     new InMemoryFeatureFlagAuditLog()
   );
   const rateLimits = new RateLimitService(new InMemoryRateLimitStore());
+  // One shared rematch guard across matchmaking + chat, as the app wiring shares
+  // a single RematchModule instance — so a block recorded via chat is honored by
+  // matchmaking (issue #27).
+  const rematchGuard = new RematchGuardService(new InMemoryRematchGuardStore());
   const service = new MatchmakingService(
     new InMemoryMatchmakingQueue(),
     flags,
-    rateLimits
+    rateLimits,
+    rematchGuard
   );
   // The gateway reads a logged-in joiner's declared gender + filter off the
   // account, so it needs a real AuthService over an (seedable) in-memory store.
@@ -80,6 +87,7 @@ function buildGateway(disabled: Array<"queue_entry" | "gender_filters"> = []) {
       },
     },
     rateLimits,
+    rematchGuard,
   );
   const gateway = new MatchmakingGateway(service, auth, chat);
   const { server, delivered } = fakeServer();

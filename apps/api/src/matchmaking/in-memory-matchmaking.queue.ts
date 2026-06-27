@@ -38,11 +38,16 @@ export class InMemoryMatchmakingQueue implements MatchmakingQueue {
 
   async takeMatch(criteria: MatchCriteria): Promise<QueuedParticipant | null> {
     const { excludeKey, now } = criteria;
+    // Identities the joiner must not be paired with: themselves, plus anyone in a
+    // rematch-prevention window after a report/block (issue #27). A Set keeps the
+    // per-candidate skip O(1) even though the exclusion list is usually empty.
+    const excluded = new Set<string>(criteria.excludeKeys);
+    excluded.add(excludeKey);
     // The Map iterates in insertion order, i.e. oldest-first, so the first
     // candidate found in each tier is the longest-waiting one (no starvation).
     let fallback: { key: string; participant: QueuedParticipant } | null = null;
     for (const [key, participant] of this.waiting) {
-      if (key === excludeKey) {
+      if (excluded.has(key)) {
         continue;
       }
 

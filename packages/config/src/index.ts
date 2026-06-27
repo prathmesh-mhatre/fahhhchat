@@ -62,8 +62,32 @@ export const productConfig = {
    * independently of the display-name cooldown so a rename and an avatar swap
    * don't consume each other's daily allowance.
    */
-  avatarChangeCooldownHours: 24
+  avatarChangeCooldownHours: 24,
+  /**
+   * How long, after a user reports-with-block or blocks the stranger they were
+   * matched with, the two identities are kept out of each other's matches (issue
+   * #27, stories 53-54). The PRD's goal is only to prevent an *immediate* rematch
+   * — "do not encounter the same person right away" — not a durable block list
+   * (anonymous guests have no durable identity to permanently block against), so
+   * this is a recency window rather than forever. Kept long enough that the two
+   * won't bump into each other again within a normal session, but bounded so the
+   * ephemeral matching state self-clears. The API enforces it; the window is the
+   * only knob, so it lives here with the other realtime-matching timings.
+   */
+  rematchPreventionSeconds: 1800
 } as const;
+
+/**
+ * Whether the "also block this user" option on the report dialog is checked by
+ * default (issue #27, story 56). Reporting *usually* should also protect the
+ * reporter from rematching, so the box defaults on; the reporter can still
+ * uncheck it to report without blocking. Shared because both sides must agree on
+ * the same default: the web app pre-checks the box from this value, and the API
+ * uses it as the default when a report request omits the `alsoBlock` flag, so an
+ * older or minimal client that doesn't send the field still gets the protective
+ * default rather than silently skipping the block.
+ */
+export const reportDefaultsAlsoBlock = true;
 
 /**
  * Curated TLDs the detector recognizes in a *bare* domain (one written without a

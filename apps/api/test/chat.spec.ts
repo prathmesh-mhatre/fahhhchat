@@ -241,4 +241,38 @@ describe("Realtime text chat (e2e)", () => {
     a.close();
     b.close();
   });
+
+  it("ends the match on report and prevents an immediate rematch of the same pair (issue #27, stories 52-54)", async () => {
+    const { a, b } = await pair();
+
+    // a reports b. With also-block defaulting on (story 56), b is told the chat
+    // ended — the same neutral match-end the client renders, never "you were
+    // reported".
+    const ended = once<MatchEndedPayload>(b, CHAT_EVENTS.matchEnded);
+    a.emit(CHAT_EVENTS.report, {});
+    expect((await ended).reason).toBe("report");
+
+    // Both rejoin the pool. They are the only two waiting, but the rematch-
+    // prevention window keeps them apart (stories 53-54), so neither is paired —
+    // both just go back to waiting. A match:found for either would be a regression.
+    let rematched = false;
+    void Promise.race([
+      once(a, MATCHMAKING_EVENTS.matchFound),
+      once(b, MATCHMAKING_EVENTS.matchFound),
+    ]).then(() => {
+      rematched = true;
+    });
+
+    a.emit(MATCHMAKING_EVENTS.join);
+    await once(a, MATCHMAKING_EVENTS.waiting);
+    b.emit(MATCHMAKING_EVENTS.join);
+    await once(b, MATCHMAKING_EVENTS.waiting);
+
+    // Give the server a beat to (not) pair them; the blocked pair must stay apart.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(rematched).toBe(false);
+
+    a.close();
+    b.close();
+  });
 });
