@@ -75,12 +75,16 @@ export interface ChatMessage {
  * slice exists to enforce: `no_active_match` means the match has ended (or never
  * existed) so the message must *not* be delivered out of context (story 43), and
  * `invalid` means the text was empty or too long. Both are reported back to the
- * sender so a client can stop retrying rather than hanging.
+ * sender so a client can stop retrying rather than hanging. `spam` is the
+ * story-45 guardrail: the message was URL-like and the sender has exceeded their
+ * link budget, so it is refused (not delivered) and the sender is told how long
+ * to wait before another link will go through.
  */
 export type SendResult =
   | { status: "delivered"; message: ChatMessage; recipientSocketId: string }
   | { status: "no_active_match" }
-  | { status: "invalid"; reason: SendInvalidReason };
+  | { status: "invalid"; reason: SendInvalidReason }
+  | { status: "spam"; retryAfterSeconds: number };
 
 /** Why a send was rejected as malformed, surfaced to the sender for messaging. */
 export type SendInvalidReason = "empty" | "too_long";
@@ -237,9 +241,12 @@ export interface SendFailedPayload {
   /**
    * Why the send failed. `match_ended` is the guardrail of story 43 — the match
    * is no longer active, so the client should stop retrying rather than deliver
-   * out of context. `empty`/`too_long` are validation failures.
+   * out of context. `empty`/`too_long` are validation failures. `spam` is the
+   * story-45 link-flood guardrail — the message was URL-like and the sender is
+   * over their link budget; retrying the same text immediately will fail again,
+   * so the client surfaces a "slow down" hint rather than auto-retrying.
    */
-  reason: "match_ended" | SendInvalidReason;
+  reason: "match_ended" | "spam" | SendInvalidReason;
 }
 
 /** Server → recipient payload carrying a delivered message. */

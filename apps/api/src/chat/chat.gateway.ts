@@ -76,6 +76,12 @@ export class ChatGateway implements OnGatewayDisconnect {
       this.fail(client, payload?.clientMessageId, result.reason);
       return;
     }
+    if (result.status === "spam") {
+      // Story 45: URL-like message over the sender's link budget. Refuse it and
+      // tell the sender to slow down rather than delivering link spam.
+      this.fail(client, payload?.clientMessageId, "spam");
+      return;
+    }
 
     // Deliver to the partner, then acknowledge the sender with the server's id and
     // timestamp so the client can clear the message's pending/retry state.

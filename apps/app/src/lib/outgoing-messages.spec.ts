@@ -143,6 +143,19 @@ describe("OutgoingMessageTracker", () => {
       expect(tracker.canRetry("c-2")).toBe(false);
     });
 
+    it("settles a link-spam refusal as rejected, not retryable (story 45)", () => {
+      const tracker = new OutgoingMessageTracker();
+      tracker.queue("c-1", "join https://spam.example.com");
+
+      tracker.fail("c-1", "spam");
+
+      // The match is still live, but re-sending the same link immediately would
+      // just be refused again, so it is terminal-rejected rather than `failed`.
+      expect(tracker.get("c-1")?.status).toBe("rejected");
+      expect(tracker.get("c-1")?.failureReason).toBe("spam");
+      expect(tracker.canRetry("c-1")).toBe(false);
+    });
+
     it("keeps a rejection's specific reason when the match later ends", () => {
       const tracker = new OutgoingMessageTracker();
       tracker.queue("c-1", "   ");

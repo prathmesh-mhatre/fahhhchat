@@ -66,6 +66,105 @@ export const productConfig = {
 } as const;
 
 /**
+ * Curated TLDs the detector recognizes in a *bare* domain (one written without a
+ * scheme), e.g. "example.com" or "sub.site.io/path". Kept to TLDs people actually
+ * use to route a stranger off-platform so ordinary prose with a period
+ * ("ok.bye", "see you...") is not misread as a link. Scheme-prefixed
+ * ("https://…") and "www."-prefixed URLs are matched regardless of TLD.
+ *
+ * Shared because the API (which flags and rate-limits link spam — story 45) and
+ * the web app (which renders URL-like text as non-clickable plain text — story
+ * 44) must agree on exactly what counts as "URL-like".
+ */
+export const urlLikeTlds = [
+  "com",
+  "net",
+  "org",
+  "io",
+  "co",
+  "xyz",
+  "me",
+  "gg",
+  "tv",
+  "app",
+  "link",
+  "info",
+  "biz",
+  "dev",
+  "ai",
+  "to",
+  "ly",
+  "site",
+  "online",
+  "live",
+  "shop",
+  "club"
+] as const;
+
+/**
+ * Source for the URL-like matcher. Two alternatives:
+ *   1. A scheme- or "www."-prefixed run, matched greedily to the next
+ *      whitespace regardless of TLD.
+ *   2. A bare `host.tld` (with optional sub-domains and path) whose final label
+ *      is one of {@link urlLikeTlds}.
+ * A fresh `RegExp` is built per call in {@link findUrlLikeSpans} because a global
+ * regex carries mutable `lastIndex` state that must not be shared.
+ */
+const URL_LIKE_SOURCE = [
+  String.raw`(?:https?:\/\/|www\.)[^\s]+`,
+  String.raw`[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9-]+)*\.(?:${urlLikeTlds.join(
+    "|"
+  )})\b(?:\/[^\s]*)?`
+].join("|");
+
+/**
+ * A URL-like run located within a piece of text: the character range and the
+ * matched substring. The web app uses the ranges to split a message into
+ * plain-text and URL segments so URLs render as inert text rather than anchors
+ * (story 44); the API only needs {@link containsUrlLike}.
+ */
+export interface UrlSpan {
+  /** Start index (inclusive) of the run within the original text. */
+  start: number;
+  /** End index (exclusive). */
+  end: number;
+  /** The matched URL-like substring (trailing sentence punctuation removed). */
+  value: string;
+}
+
+/**
+ * Locate every URL-like run in `text`, in order. Trailing sentence punctuation
+ * (`. , ! ? ; : ) ]`) is trimmed off each match so "visit https://a.com." does
+ * not pull the period into the link span. Returns an empty array for non-strings
+ * and text with no URL-like content.
+ */
+export function findUrlLikeSpans(text: string): UrlSpan[] {
+  if (typeof text !== "string" || text.length === 0) {
+    return [];
+  }
+  const spans: UrlSpan[] = [];
+  const pattern = new RegExp(URL_LIKE_SOURCE, "gi");
+  for (const match of text.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    const value = match[0].replace(/[.,!?;:)\]]+$/, "");
+    if (value.length === 0) {
+      continue;
+    }
+    spans.push({ start, end: start + value.length, value });
+  }
+  return spans;
+}
+
+/**
+ * Whether `text` contains at least one URL-like run. The cheap predicate the API
+ * uses to decide a message is link-bearing — and so should count against the
+ * {@link rateLimits}.`chat_link` spam budget (story 45).
+ */
+export function containsUrlLike(text: string): boolean {
+  return findUrlLikeSpans(text).length > 0;
+}
+
+/**
  * Whether the user may change their display name right now, surfaced in the
  * guest/user summaries so the editor can disable itself and explain the wait.
  * The API is authoritative — this is advisory state for the UI. Lives here
@@ -255,12 +354,17 @@ export interface RateLimitRule {
 export type RateLimitTier = "guest" | "user";
 
 /**
- * Rate-limited matching actions (story 144): joining the shared pool and
- * (re)connecting to realtime. Deliberately does *not* include clicking Next —
- * the PRD forbids a rapid-Next cooldown beyond the two-step confirmation (story
- * 145), so Next stays fluid and is never throttled here.
+ * Rate-limited actions. Matching actions (story 144): joining the shared pool
+ * and (re)connecting to realtime. Deliberately does *not* include clicking Next
+ * — the PRD forbids a rapid-Next cooldown beyond the two-step confirmation
+ * (story 145), so Next stays fluid and is never throttled here.
+ *
+ * `chat_link` is the spam-control budget for *URL-bearing* chat messages (story
+ * 45): only a message that {@link containsUrlLike} counts against it, so ordinary
+ * chat is never throttled but a burst of links is. Keyed per identity like the
+ * others — stricter for guests than logged-in users.
  */
-export type RateLimitAction = "queue_join" | "reconnect";
+export type RateLimitAction = "queue_join" | "reconnect" | "chat_link";
 
 /**
  * Layered abuse-control thresholds for matching operations, keyed by action and
@@ -284,6 +388,16 @@ export const rateLimits: Record<
   reconnect: {
     guest: { limit: 15, windowSeconds: 60 },
     user: { limit: 30, windowSeconds: 60 }
+  },
+  /**
+   * URL-bearing messages per window (story 45). Generous enough that genuinely
+   * sharing a link in conversation is never blocked, tight enough that a
+   * link-spam flood is throttled after a handful. Only messages that contain a
+   * URL-like span are counted, so a normal chat never touches this budget.
+   */
+  chat_link: {
+    guest: { limit: 4, windowSeconds: 60 },
+    user: { limit: 8, windowSeconds: 60 }
   }
 };
 
