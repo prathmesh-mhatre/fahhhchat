@@ -401,6 +401,53 @@ export const rateLimits: Record<
   }
 };
 
+/**
+ * Admin roles gating the safety/operations tooling (stories 82-83). Admin access
+ * requires Google login *plus* one of these database-stored roles — a general
+ * Google user with no role is never an admin. The set is deliberately small for
+ * the MVP: `admin` covers day-to-day report review and enforcement, while
+ * `superadmin` is reserved for managing other admins/roles. Roles are stored on
+ * the durable admin record (Postgres per the PRD); this list is the shared
+ * vocabulary so the API and any future admin UI agree on the exact role names.
+ */
+export const adminRoles = ["admin", "superadmin"] as const;
+
+export type AdminRole = (typeof adminRoles)[number];
+
+/** Type-guard for a known admin role. */
+export function isAdminRole(value: unknown): value is AdminRole {
+  return typeof value === "string" && (adminRoles as readonly string[]).includes(value);
+}
+
+/**
+ * Environment variable carrying the comma-separated allowlist of initial admin
+ * emails (story 83). Seeded admins are granted the default admin role on boot so
+ * launch access can be controlled without a migration. The value is a Google
+ * email (internal-use identity), never shown publicly.
+ */
+export const ADMIN_ALLOWLIST_ENV = "ADMIN_EMAIL_ALLOWLIST";
+
+/**
+ * Parse a raw allowlist string (e.g. the {@link ADMIN_ALLOWLIST_ENV} value) into
+ * a normalized, de-duplicated list of admin emails. Entries are trimmed and
+ * lower-cased so allowlist matching is case-insensitive (Google emails are), and
+ * blank entries are dropped so a trailing comma or empty env var yields no
+ * admins. Shared so the API seeds exactly what an operator configured.
+ */
+export function parseAdminAllowlist(raw: string | undefined | null): string[] {
+  if (typeof raw !== "string") {
+    return [];
+  }
+  const seen = new Set<string>();
+  for (const entry of raw.split(",")) {
+    const email = entry.trim().toLowerCase();
+    if (email.length > 0) {
+      seen.add(email);
+    }
+  }
+  return [...seen];
+}
+
 export const featureFlagKeys = [
   "camera_media",
   "gender_filters",
