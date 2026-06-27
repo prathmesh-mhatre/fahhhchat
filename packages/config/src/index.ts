@@ -439,6 +439,104 @@ export function isFeatureFlagKey(value: unknown): value is FeatureFlagKey {
 }
 
 /**
+ * Why the in-chat camera affordance is locked for the current match (stories
+ * 125-126): the affordance is always *visible* but only usable when every gate
+ * is open, so when it is locked the UI must explain *which* gate is closed.
+ * Ordered most-actionable-first so {@link cameraMediaEligibility} reports the
+ * single reason most worth surfacing:
+ *
+ * - `flag_disabled` — the `camera_media` launch kill switch is off (story 84);
+ *   nobody can share, so this dominates the per-user login gates.
+ * - `viewer_not_logged_in` — *you* are a guest; signing in is the user's own
+ *   next step (story 97), so it outranks the partner's status.
+ * - `partner_not_logged_in` — your partner is a guest; nothing you can do but
+ *   it still explains the lock honestly (story 126).
+ */
+export type CameraMediaLockReason =
+  | "flag_disabled"
+  | "viewer_not_logged_in"
+  | "partner_not_logged_in";
+
+/**
+ * Inputs to {@link cameraMediaEligibility}. Media sharing is a *post-match*
+ * capability (PRD decision), available only when BOTH matched users are
+ * logged in (story 97) *and* the `camera_media` kill switch is on (story 84) —
+ * it is never a separate matchmaking pool. The two login bits come from the
+ * match: the viewer knows their own identity tier, and the match payload
+ * carries whether the partner is logged in.
+ */
+export interface CameraMediaEligibilityInput {
+  /** Whether the `camera_media` feature flag is currently enabled (story 84). */
+  flagEnabled: boolean;
+  /** Whether the current (viewing) user is a logged-in account, not a guest. */
+  viewerLoggedIn: boolean;
+  /** Whether the matched partner is a logged-in account, not a guest. */
+  partnerLoggedIn: boolean;
+}
+
+/**
+ * Eligibility result for the in-chat camera affordance. `available: true` means
+ * every gate is open and the affordance is unlocked; `available: false` carries
+ * the single dominant {@link CameraMediaLockReason} so the UI can both lock the
+ * control and explain *why* (stories 125-126). When available the `reason` is
+ * null. Pure and shared because the same gate is reasoned about across the
+ * frontend (locked UI) and is part of the API↔web contract feeding it.
+ */
+export type CameraMediaEligibility =
+  | { available: true; reason: null }
+  | { available: false; reason: CameraMediaLockReason };
+
+/**
+ * Decide whether the camera-media affordance is usable for a match, or, if not,
+ * the single most-actionable reason it is locked (stories 97, 125-126). The flag
+ * kill switch dominates (when off, no login could unlock it), then the viewer's
+ * own login (their actionable next step), then the partner's. Returning a
+ * structured reason — not a boolean — is what lets the locked affordance stay
+ * visible *and* explain itself rather than silently disappearing.
+ */
+export function cameraMediaEligibility(
+  input: CameraMediaEligibilityInput
+): CameraMediaEligibility {
+  if (!input.flagEnabled) {
+    return { available: false, reason: "flag_disabled" };
+  }
+  if (!input.viewerLoggedIn) {
+    return { available: false, reason: "viewer_not_logged_in" };
+  }
+  if (!input.partnerLoggedIn) {
+    return { available: false, reason: "partner_not_logged_in" };
+  }
+  return { available: true, reason: null };
+}
+
+/**
+ * Human-readable copy for each {@link CameraMediaLockReason}, shared so every
+ * surface that locks the camera affordance explains it identically (story 126).
+ * Each entry pairs a short `label` (the visible hint) with a fuller
+ * `description` suitable for an accessible name / tooltip / screen-reader text.
+ */
+export const cameraMediaLockMessages: Record<
+  CameraMediaLockReason,
+  { label: string; description: string }
+> = {
+  flag_disabled: {
+    label: "Camera sharing is currently unavailable",
+    description:
+      "Camera sharing is turned off right now. Please check back later."
+  },
+  viewer_not_logged_in: {
+    label: "Sign in to share your camera",
+    description:
+      "Camera sharing is only available when both people are signed in. Sign in to unlock it."
+  },
+  partner_not_logged_in: {
+    label: "Both people must be signed in",
+    description:
+      "Camera sharing is only available when both people are signed in, and the person you're matched with is a guest."
+  }
+} as const;
+
+/**
  * Generated display identity assigned to every user (guest or logged-in). The
  * PRD models identity around an internal id and never the public Google
  * identity, so all users — including logged-in ones — are shown to matched

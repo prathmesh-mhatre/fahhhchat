@@ -1,4 +1,5 @@
 import { ButtonLink, Eyebrow, Surface } from "@fahhhchat/ui";
+import { CameraAffordance } from "../components/CameraAffordance";
 
 export default function ChatEntryPage() {
   return (
@@ -7,6 +8,21 @@ export default function ChatEntryPage() {
         <div className="topbar">
           <span className="presence-dot" aria-hidden="true" />
           <span>Ready to match</span>
+          {/*
+           * The camera affordance is always visible but locked until both
+           * matched users are logged in and the camera-media kill switch is on
+           * (issue #38, stories 97, 125-126). Before a match exists the viewer
+           * here is treated as a guest, so it renders locked with a "sign in"
+           * explanation; the live match screen (later slices) will feed the real
+           * viewer/partner login bits and the polled feature-flag state in.
+           */}
+          <CameraAffordance
+            inputs={{
+              viewerLoggedIn: false,
+              partnerLoggedIn: false,
+              cameraMediaFlagEnabled: true,
+            }}
+          />
         </div>
         <div className="entry">
           <Eyebrow className="eyebrow">Guest chat is the fastest path</Eyebrow>

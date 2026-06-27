@@ -160,6 +160,27 @@ describe("MatchmakingGateway", () => {
     expect(initiator.matchId).toBe(responder.matchId);
   });
 
+  it("tells each side whether the partner is logged in for media gating (issue #38, story 97)", async () => {
+    const { gateway, delivered } = buildGateway();
+    const a = fakeSocket("s1", guest("g1")); // a guest
+    const b = fakeSocket("s2", user("u1")); // a logged-in user
+
+    await gateway.handleJoin(a.socket); // queued
+    await gateway.handleJoin(b.socket); // matches g1
+
+    const found = delivered.filter(
+      (d) => d.event === MATCHMAKING_EVENTS.matchFound
+    );
+    const byTarget = Object.fromEntries(found.map((d) => [d.to, d.payload]));
+    // The guest's partner is the logged-in user; the user's partner is the guest.
+    expect(
+      (byTarget["s1"] as { partnerLoggedIn: boolean }).partnerLoggedIn
+    ).toBe(true);
+    expect(
+      (byTarget["s2"] as { partnerLoggedIn: boolean }).partnerLoggedIn
+    ).toBe(false);
+  });
+
   it("registers the active match with the chat layer so messages can route (issue #21)", async () => {
     const { gateway, chat } = buildGateway();
     const a = fakeSocket("s1", guest("g1"));
