@@ -90,6 +90,102 @@ export const productConfig = {
 export const reportDefaultsAlsoBlock = true;
 
 /**
+ * The categories a reporter can file a report under (issue #28, story 59). The
+ * reporter must pick one — a report is always *category-tagged* — but the details
+ * are optional, so a category-only report is accepted (story 60). Shared so the
+ * web app's report form, the API that validates incoming reports, and the future
+ * admin review surface all agree on the exact set and order.
+ *
+ * Ordered roughly most-severe-first as the form should present them, with `other`
+ * last as the catch-all. `other` is also the server's fallback: an incoming report
+ * whose category is missing or unrecognised is normalised to `other` rather than
+ * rejected, because a report must always succeed in ending an unsafe chat — the
+ * category is metadata for moderators, never a gate on filing (story 60).
+ *
+ * `media_abuse` is included now even though media sharing arrives in a later slice
+ * (the category vocabulary is the durable contract); it pairs with the media-abuse
+ * report metadata handled in issue #44.
+ */
+export const reportCategories = [
+  "harassment_hate",
+  "sexual_content",
+  "underage",
+  "spam_scam",
+  "media_abuse",
+  "self_harm_threats",
+  "other",
+] as const;
+
+/** A single report category from the shared {@link reportCategories} vocabulary. */
+export type ReportCategory = (typeof reportCategories)[number];
+
+/**
+ * Human-readable labels for the report categories (issue #28, story 59), shared so
+ * the report form and the admin review surface render the same wording. The ids in
+ * {@link reportCategories} are the stable contract; this copy can be reworded
+ * without a data migration.
+ */
+export const reportCategoryLabels: Record<ReportCategory, string> = {
+  harassment_hate: "Harassment or hate",
+  sexual_content: "Unwanted sexual content",
+  underage: "Underage concern",
+  spam_scam: "Spam or scam",
+  media_abuse: "Camera / media abuse",
+  self_harm_threats: "Self-harm or threats",
+  other: "Something else",
+};
+
+/**
+ * The category an incoming report falls back to when it names none, or names one
+ * the server does not recognise (story 60) — see {@link normalizeReportCategory}.
+ */
+export const defaultReportCategory: ReportCategory = "other";
+
+/**
+ * Maximum length (characters) of the optional free-text report details (issue #28,
+ * story 61). Details are optional context for moderators, not a message, so the
+ * cap is generous but bounded — the API truncates anything longer (and the form
+ * limits its textarea to match) so an oversized blob can never be filed.
+ */
+export const reportDetailsMaxLength = 1000;
+
+/** Type guard: whether `value` is one of the known {@link reportCategories}. */
+export function isReportCategory(value: unknown): value is ReportCategory {
+  return (
+    typeof value === "string" &&
+    (reportCategories as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * Normalise a client-supplied report category to a known one, defaulting to
+ * {@link defaultReportCategory} when it is missing or unrecognised (story 60). Used
+ * on the API boundary so a malformed or outdated client can never make a report
+ * fail to file — the worst case is an `other`-tagged report a moderator triages.
+ */
+export function normalizeReportCategory(value: unknown): ReportCategory {
+  return isReportCategory(value) ? value : defaultReportCategory;
+}
+
+/**
+ * Normalise the optional free-text report details (story 61): trim surrounding
+ * whitespace, collapse an empty/whitespace-only value to `undefined` (a
+ * category-only report, story 60), and cap the result at
+ * {@link reportDetailsMaxLength} so an oversized blob can't be filed. Shared so the
+ * web app and the API agree on exactly what an "empty" and a "too long" detail are.
+ */
+export function normalizeReportDetails(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  return trimmed.slice(0, reportDetailsMaxLength);
+}
+
+/**
  * Curated TLDs the detector recognizes in a *bare* domain (one written without a
  * scheme), e.g. "example.com" or "sub.site.io/path". Kept to TLDs people actually
  * use to route a stranger off-platform so ordinary prose with a period

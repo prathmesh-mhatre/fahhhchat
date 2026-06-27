@@ -1,3 +1,4 @@
+import type { ReportCategory } from "@fahhhchat/config";
 import type { RealtimeIdentity } from "../realtime/realtime.types";
 
 /**
@@ -365,11 +366,49 @@ export interface SendMessagePayload {
  * client can omit it and still get the protective default
  * ({@link import("@fahhhchat/config").reportDefaultsAlsoBlock}, currently on) —
  * the server treats an absent flag as the default rather than as "do not block".
- * The report categories/details land in issue #28, so this payload stays minimal.
+ *
+ * The report's form fields land here (issue #28, stories 59-61): {@link category}
+ * tags the report from the shared {@link import("@fahhhchat/config").reportCategories}
+ * vocabulary, and {@link details} carries optional free-text context. Both are
+ * optional *on the wire* and normalised server-side — a missing/unrecognised
+ * category falls back to `other` and empty details collapse away — so a report can
+ * never fail to file for lack of (or a malformed) form value (story 60). Capturing
+ * the surrounding chat context and opening a moderator case from the report are the
+ * separate concerns of issues #29-30.
  */
 export interface ReportMatchPayload {
   /** Whether to also block (prevent immediate rematch). Defaults to on (story 56). */
   alsoBlock?: boolean;
+  /**
+   * The category the reporter filed under (story 59). The form requires a choice,
+   * but the server tolerates an absent/unknown value by normalising it to `other`
+   * (story 60) — see {@link import("@fahhhchat/config").normalizeReportCategory}.
+   */
+  category?: ReportCategory;
+  /**
+   * Optional free-text context (story 61), trimmed and length-capped server-side
+   * ({@link import("@fahhhchat/config").normalizeReportDetails}). Omitted for a
+   * category-only report (story 60).
+   */
+  details?: string;
+}
+
+/**
+ * A report after the gateway has validated/normalised the raw
+ * {@link ReportMatchPayload}: the also-block decision plus the report's form data
+ * (issue #28, stories 59-61). Unlike the wire payload every field here is settled —
+ * {@link category} is always a known value (never absent) and {@link details} is
+ * present only when it carried real text. {@link import("./chat.service").ChatService}
+ * takes this shape so the validated report flows intact toward the context capture
+ * (issue #29) and case creation (issue #30) that consume it.
+ */
+export interface ReportSubmission {
+  /** Whether to also record a rematch-prevention block (story 56). */
+  alsoBlock: boolean;
+  /** The normalised report category (story 59); `other` when none was given. */
+  category: ReportCategory;
+  /** Optional normalised free-text context (story 61); absent when empty. */
+  details?: string;
 }
 
 /** Server → sender payload acknowledging a delivered message. */

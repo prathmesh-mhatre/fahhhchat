@@ -17,6 +17,7 @@ import {
   type DisplayNameResolver,
   type EndedMatch,
   type MatchEndReason,
+  type ReportSubmission,
   type ResumeResult,
   type SendMessagePayload,
   type SendResult,
@@ -387,10 +388,10 @@ export class ChatService {
   /**
    * Report the stranger the caller is matched with, ending the match (issue #27,
    * stories 52, 55-56). Reporting immediately and permanently closes the match so
-   * the caller can leave an unsafe interaction; when {@link alsoBlock} is set (the
-   * default — story 56), it also records a rematch-prevention block so the two are
-   * not paired again right away (story 54). The match is resolved from the
-   * caller's *identity*, never client input, so a user can only report their own
+   * the caller can leave an unsafe interaction; when {@link ReportSubmission.alsoBlock}
+   * is set (the default — story 56), it also records a rematch-prevention block so
+   * the two are not paired again right away (story 54). The match is resolved from
+   * the caller's *identity*, never client input, so a user can only report their own
    * current chat. The block is recorded *before* the match is torn down because
    * teardown drops the participant records the partner's identity key is read
    * from. Like {@link nextMatch}, the caller's own socket is excluded from the
@@ -399,16 +400,21 @@ export class ChatService {
    * end, never "you were reported". A no-op returning null when the caller is not
    * in a live match, keeping a double-report or a report racing a disconnect safe.
    *
-   * Filing the report record itself (categories, details, surrounding context,
-   * case creation, trust weighting) is deferred to issues #28-30; this slice owns
-   * only the termination + also-block half (stories 52, 54-56).
+   * The {@link submission} carries the validated report form — its category and
+   * optional details (issue #28, stories 59-61) — already normalised by the gateway,
+   * so a report always has a settled category. This slice owns the termination +
+   * also-block half plus the *contract* for that form data; capturing the
+   * surrounding chat context (issue #29) and opening a trust-weighted moderator case
+   * (issue #30) are the slices that consume {@link ReportSubmission.category} and
+   * {@link ReportSubmission.details}, so they ride along on the submission here
+   * rather than being re-plumbed later.
    */
   async reportMatch(
     identity: RealtimeIdentity,
-    alsoBlock: boolean,
+    submission: ReportSubmission,
     now: Date = new Date(),
   ): Promise<EndedMatch | null> {
-    return this.endSafetyMatch(identity, "report", alsoBlock, now);
+    return this.endSafetyMatch(identity, "report", submission.alsoBlock, now);
   }
 
   /**

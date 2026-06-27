@@ -6,7 +6,12 @@ import {
   WebSocketServer,
 } from "@nestjs/websockets";
 import type { Server, Socket } from "socket.io";
-import { productConfig, reportDefaultsAlsoBlock } from "@fahhhchat/config";
+import {
+  normalizeReportCategory,
+  normalizeReportDetails,
+  productConfig,
+  reportDefaultsAlsoBlock,
+} from "@fahhhchat/config";
 import { webOrigins } from "../cors-origins";
 import type { AuthenticatedSocketData } from "../realtime/realtime.gateway";
 import { ChatService } from "./chat.service";
@@ -20,6 +25,7 @@ import {
   type PartnerDisconnectedPayload,
   type PartnerReconnectedPayload,
   type ReportMatchPayload,
+  type ReportSubmission,
   type ResumeFailedPayload,
   type ResumedPayload,
   type SendFailedPayload,
@@ -176,9 +182,13 @@ export class ChatGateway implements OnGatewayDisconnect {
 
   /**
    * Report the current match's stranger and end the chat (issue #27, stories 52,
-   * 55-56). The report's only client-supplied input is whether to *also block*
-   * (story 56); an absent flag falls back to the shared protective default rather
-   * than skipping the block, so a minimal client still gets rematch protection.
+   * 55-56; issue #28, stories 59-61). The reporter supplies whether to *also block*
+   * (story 56) and the report form — a category (story 59) and optional free-text
+   * details (story 61). All three are normalised here before the report is filed:
+   * an absent also-block flag falls back to the shared protective default, an
+   * absent/unrecognised category falls back to `other`, and blank details collapse
+   * to nothing (story 60) — so a minimal or malformed client still files a valid
+   * report and gets rematch protection rather than failing to leave an unsafe chat.
    * The match is resolved from the socket's verified identity; the partner is told
    * the chat ended (the reporter's client already moved on, like Next). An
    * unauthenticated socket, or one not in a live match, is a silent no-op — there
@@ -194,8 +204,12 @@ export class ChatGateway implements OnGatewayDisconnect {
       return;
     }
 
-    const alsoBlock = payload?.alsoBlock ?? reportDefaultsAlsoBlock;
-    const ended = await this.chat.reportMatch(identity, alsoBlock);
+    const submission: ReportSubmission = {
+      alsoBlock: payload?.alsoBlock ?? reportDefaultsAlsoBlock,
+      category: normalizeReportCategory(payload?.category),
+      details: normalizeReportDetails(payload?.details),
+    };
+    const ended = await this.chat.reportMatch(identity, submission);
     if (ended) {
       this.notifyEnded(ended);
     }

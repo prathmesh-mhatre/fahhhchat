@@ -1,5 +1,9 @@
 import type { Server, Socket } from "socket.io";
-import { productConfig, rateLimits } from "@fahhhchat/config";
+import {
+  productConfig,
+  rateLimits,
+  reportDetailsMaxLength,
+} from "@fahhhchat/config";
 import type {
   Match,
   QueuedParticipant,
@@ -321,6 +325,76 @@ describe("ChatGateway", () => {
 
       expect(delivered).toHaveLength(0);
       expect(rogue.emitted).toHaveLength(0);
+    });
+  });
+
+  describe("report form categories and details (issue #28, stories 59-61)", () => {
+    it("passes the chosen category and trimmed details to the report (stories 59, 61)", async () => {
+      const { gateway, chat } = buildGateway();
+      await seedMatch(chat);
+      const reporter = fakeSocket(INITIATOR.socketId, INITIATOR.identity);
+      const reportMatch = jest.spyOn(chat, "reportMatch");
+
+      await gateway.handleReport(reporter.socket, {
+        alsoBlock: true,
+        category: "harassment_hate",
+        details: "  said something threatening  ",
+      });
+
+      expect(reportMatch).toHaveBeenCalledWith(INITIATOR.identity, {
+        alsoBlock: true,
+        category: "harassment_hate",
+        details: "said something threatening",
+      });
+    });
+
+    it("accepts a category-only report, dropping empty details (story 60)", async () => {
+      const { gateway, chat } = buildGateway();
+      await seedMatch(chat);
+      const reporter = fakeSocket(INITIATOR.socketId, INITIATOR.identity);
+      const reportMatch = jest.spyOn(chat, "reportMatch");
+
+      await gateway.handleReport(reporter.socket, {
+        category: "spam_scam",
+        details: "   ",
+      });
+
+      const submission = reportMatch.mock.calls[0][1];
+      expect(submission.category).toBe("spam_scam");
+      expect(submission.details).toBeUndefined();
+    });
+
+    it("falls back to the `other` category when none (or an unknown one) is given (story 60)", async () => {
+      const { gateway, chat } = buildGateway();
+      await seedMatch(chat);
+      const reporter = fakeSocket(INITIATOR.socketId, INITIATOR.identity);
+      const reportMatch = jest.spyOn(chat, "reportMatch");
+
+      // A minimal client sends no form, and a malformed one an unknown category;
+      // both must still file a valid report rather than failing to leave the chat.
+      await gateway.handleReport(reporter.socket, undefined);
+      await gateway.handleReport(reporter.socket, {
+        category: "not_a_real_category" as never,
+      });
+
+      expect(reportMatch.mock.calls[0][1].category).toBe("other");
+      expect(reportMatch.mock.calls[1][1].category).toBe("other");
+    });
+
+    it("caps over-long details at the shared limit (story 61)", async () => {
+      const { gateway, chat } = buildGateway();
+      await seedMatch(chat);
+      const reporter = fakeSocket(INITIATOR.socketId, INITIATOR.identity);
+      const reportMatch = jest.spyOn(chat, "reportMatch");
+
+      await gateway.handleReport(reporter.socket, {
+        category: "other",
+        details: "x".repeat(reportDetailsMaxLength + 50),
+      });
+
+      expect(reportMatch.mock.calls[0][1].details).toHaveLength(
+        reportDetailsMaxLength,
+      );
     });
   });
 

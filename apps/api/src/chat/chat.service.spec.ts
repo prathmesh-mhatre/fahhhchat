@@ -9,7 +9,7 @@ import { RateLimitService } from "../rate-limit/rate-limit.service";
 import { InMemoryRematchGuardStore } from "../rematch/in-memory-rematch-guard.store";
 import { RematchGuardService } from "../rematch/rematch-guard.service";
 import { ChatService } from "./chat.service";
-import type { DisplayNameResolver } from "./chat.types";
+import type { DisplayNameResolver, ReportSubmission } from "./chat.types";
 import { InMemoryChatStore } from "./in-memory-chat.store";
 
 const guest = (id: string): RealtimeIdentity => ({ kind: "guest", id });
@@ -380,11 +380,19 @@ describe("ChatService", () => {
     const initiatorKey = "user:u1";
     const responderKey = "guest:g1";
 
+    // A minimal normalised report submission (issue #28): the gateway always hands
+    // the service a settled category, so these tests pin the also-block behaviour
+    // with a fixed `other`-category report.
+    const report = (alsoBlock: boolean): ReportSubmission => ({
+      alsoBlock,
+      category: "other",
+    });
+
     it("reporting ends the match with reason `report` and notifies only the partner (story 52)", async () => {
       const { service } = buildService();
       await service.registerMatch(match(initiator, responder));
 
-      const ended = await service.reportMatch(initiator.identity, true);
+      const ended = await service.reportMatch(initiator.identity, report(true));
 
       expect(ended?.reason).toBe("report");
       // The reporter's own socket is excluded — like Next, their client already
@@ -409,7 +417,7 @@ describe("ChatService", () => {
       const { service, rematchGuard } = buildService();
       await service.registerMatch(match(initiator, responder));
 
-      await service.reportMatch(initiator.identity, true);
+      await service.reportMatch(initiator.identity, report(true));
 
       // Mutual: each side now excludes the other, regardless of who later joins.
       expect(await rematchGuard.excludedKeysFor(initiatorKey)).toEqual([
@@ -424,7 +432,7 @@ describe("ChatService", () => {
       const { service, rematchGuard } = buildService();
       await service.registerMatch(match(initiator, responder));
 
-      const ended = await service.reportMatch(initiator.identity, false);
+      const ended = await service.reportMatch(initiator.identity, report(false));
 
       expect(ended?.reason).toBe("report");
       // No block requested, so the two can be paired again immediately.
@@ -449,7 +457,9 @@ describe("ChatService", () => {
     it("are no-ops when the caller is not in a live match", async () => {
       const { service, rematchGuard } = buildService();
 
-      expect(await service.reportMatch(initiator.identity, true)).toBeNull();
+      expect(
+        await service.reportMatch(initiator.identity, report(true)),
+      ).toBeNull();
       expect(await service.blockMatch(initiator.identity)).toBeNull();
       // Nothing recorded, since there was no partner to block.
       expect(await rematchGuard.excludedKeysFor(initiatorKey)).toEqual([]);
