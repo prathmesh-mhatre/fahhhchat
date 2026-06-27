@@ -5,6 +5,7 @@ import { ChatModule } from "../chat/chat.module";
 import { ConsentModule } from "../consent/consent.module";
 import { FeatureFlagsModule } from "../feature-flags/feature-flags.module";
 import { MatchmakingModule } from "../matchmaking/matchmaking.module";
+import { ModerationModule } from "../moderation/moderation.module";
 import { RealtimeModule } from "../realtime/realtime.module";
 import { SessionModule } from "../session/session.module";
 import { HealthController } from "./health.controller";
@@ -18,6 +19,7 @@ import { HealthController } from "./health.controller";
     FeatureFlagsModule,
     MatchmakingModule,
     ChatModule,
+    ModerationModule,
     AdminModule
   ],
   controllers: [HealthController]
