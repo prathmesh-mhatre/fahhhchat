@@ -1,6 +1,11 @@
 import type { Redis } from "ioredis";
 import { productConfig } from "@fahhhchat/config";
-import type { ActiveMatch, ChatMessage, ChatStore } from "./chat.types";
+import type {
+  ActiveMatch,
+  ChatMessage,
+  ChatStore,
+  DisconnectMark,
+} from "./chat.types";
 
 /**
  * Redis-backed active-match + ephemeral buffer store, matching the PRD decision
@@ -118,6 +123,70 @@ export class RedisChatStore implements ChatStore {
       tx.del(this.identityKey(participant.identityKey));
       tx.del(this.socketKey(participant.socketId));
     }
+    await tx.exec();
+    return match;
+  }
+
+  async markDisconnected(
+    socketId: string,
+    graceExpiresAt: string,
+  ): Promise<DisconnectMark | null> {
+    const matchId = await this.redis.get(this.socketKey(socketId));
+    const match = matchId ? await this.getMatch(matchId) : null;
+    if (!matchId || !match) {
+      return null;
+    }
+    const participant = match.participants.find((p) => p.socketId === socketId);
+    const partner = match.participants.find((p) => p.socketId !== socketId);
+    if (!participant || !partner) {
+      return null;
+    }
+    participant.connected = false;
+    participant.graceExpiresAt = graceExpiresAt;
+    const tx = this.redis.multi();
+    // Persist the disconnected state and drop the dead socket index so no send
+    // routes to it; the match/buffer keys live on for a reconnect within grace.
+    tx.set(
+      this.matchKey(matchId),
+      JSON.stringify(match),
+      "EX",
+      this.ttlSeconds,
+    );
+    tx.del(this.socketKey(socketId));
+    await tx.exec();
+    return { match, participantKey: participant.identityKey, partner };
+  }
+
+  async reattach(
+    identityKey: string,
+    newSocketId: string,
+  ): Promise<ActiveMatch | null> {
+    const matchId = await this.redis.get(this.identityKey(identityKey));
+    const match = matchId ? await this.getMatch(matchId) : null;
+    if (!matchId || !match) {
+      return null;
+    }
+    const participant = match.participants.find(
+      (p) => p.identityKey === identityKey,
+    );
+    if (!participant) {
+      return null;
+    }
+    const oldSocketId = participant.socketId;
+    participant.socketId = newSocketId;
+    participant.connected = true;
+    delete participant.graceExpiresAt;
+    const tx = this.redis.multi();
+    tx.set(
+      this.matchKey(matchId),
+      JSON.stringify(match),
+      "EX",
+      this.ttlSeconds,
+    );
+    // Retire the prior socket index (may already be gone from markDisconnected)
+    // and bind the fresh one.
+    tx.del(this.socketKey(oldSocketId));
+    tx.set(this.socketKey(newSocketId), matchId, "EX", this.ttlSeconds);
     await tx.exec();
     return match;
   }

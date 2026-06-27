@@ -9,8 +9,6 @@ import {
   CHAT_EVENTS,
   type AckPayload,
   type ChatMessagePayload,
-  type MatchEndedPayload,
-  type SendFailedPayload,
   type TypingIndicatorPayload,
 } from "../src/chat/chat.types";
 import { MATCHMAKING_EVENTS } from "../src/matchmaking/matchmaking.types";
@@ -50,23 +48,35 @@ describe("Realtime text chat (e2e)", () => {
     await app.close();
   });
 
+  /** Mint a fresh realtime handshake token for an existing guest session cookie. */
+  async function tokenFor(cookie: string[]): Promise<string> {
+    const res = await request(app.getHttpServer())
+      .post("/realtime/token")
+      .set("Cookie", cookie)
+      .expect(200);
+    return res.body.token as string;
+  }
+
   /**
-   * Accept a fresh guest session and mint its realtime token, returning both the
-   * token and the server-generated display name so a typing test can assert the
-   * exact name the stranger sees (story 40).
+   * Accept a fresh guest session and mint its realtime token, returning the token,
+   * the server-generated display name (so a typing test can assert the exact name
+   * the stranger sees, story 40), and the session cookie (so a reconnect test can
+   * mint a *new* token for the *same* session, story 47).
    */
-  async function guest(): Promise<{ token: string; displayName: string }> {
+  async function guest(): Promise<{
+    token: string;
+    displayName: string;
+    cookie: string[];
+  }> {
     const accept = await request(app.getHttpServer())
       .post("/session/guest/accept")
       .send({ ageConfirmed: true, legalVersion: productConfig.legalVersion })
       .expect(200);
-    const res = await request(app.getHttpServer())
-      .post("/realtime/token")
-      .set("Cookie", accept.headers["set-cookie"])
-      .expect(200);
+    const cookie = accept.headers["set-cookie"] as unknown as string[];
     return {
-      token: res.body.token as string,
+      token: await tokenFor(cookie),
       displayName: accept.body.identity.displayName as string,
+      cookie,
     };
   }
 
@@ -91,6 +101,8 @@ describe("Realtime text chat (e2e)", () => {
     b: Socket;
     aName: string;
     bName: string;
+    ga: Awaited<ReturnType<typeof guest>>;
+    gb: Awaited<ReturnType<typeof guest>>;
   }> {
     const [ga, gb] = await Promise.all([guest(), guest()]);
     const [a, b] = await Promise.all([connect(ga.token), connect(gb.token)]);
@@ -100,7 +112,7 @@ describe("Realtime text chat (e2e)", () => {
     await once(a, MATCHMAKING_EVENTS.waiting);
     b.emit(MATCHMAKING_EVENTS.join);
     await Promise.all([aMatched, bMatched]);
-    return { a, b, aName: ga.displayName, bName: gb.displayName };
+    return { a, b, aName: ga.displayName, bName: gb.displayName, ga, gb };
   }
 
   it("delivers a message to the partner and acknowledges the sender (story 39)", async () => {
@@ -145,23 +157,60 @@ describe("Realtime text chat (e2e)", () => {
     b.close();
   });
 
-  it("refuses a send after the partner disconnects, and notifies the partner (stories 43, 46)", async () => {
+  it("warns the partner and holds the chat open when a socket briefly drops (story 47)", async () => {
     const { a, b } = await pair();
 
-    // a leaves: b should be told the match ended.
-    const ended = once<MatchEndedPayload>(b, CHAT_EVENTS.matchEnded);
+    // a's connection drops: b is told the partner is reconnecting, NOT that the
+    // chat ended, and the match is held open for the grace window.
+    const dropped = once<{ matchId: string; graceSeconds: number }>(
+      b,
+      CHAT_EVENTS.partnerDisconnected,
+    );
     a.close();
-    const end = await ended;
-    expect(end.reason).toBe("partner_disconnected");
+    const notice = await dropped;
+    expect(notice.graceSeconds).toBe(productConfig.reconnectGraceSeconds);
 
-    // b's next send has no live match, so it is refused rather than delivered
-    // out of context — the client should stop retrying.
-    const failed = once<SendFailedPayload>(b, CHAT_EVENTS.sendFailed);
-    b.emit(CHAT_EVENTS.send, { text: "anyone there?", clientMessageId: "c-2" });
-    const fail = await failed;
-    expect(fail.reason).toBe("match_ended");
-    expect(fail.clientMessageId).toBe("c-2");
+    // The match is still live: b's send is accepted (and buffered for a's return),
+    // not refused as match-ended.
+    const acked = once<AckPayload>(b, CHAT_EVENTS.ack);
+    b.emit(CHAT_EVENTS.send, { text: "you still there?", clientMessageId: "c-2" });
+    const ack = await acked;
+    expect(ack.clientMessageId).toBe("c-2");
 
+    b.close();
+  });
+
+  it("restores the chat, and replays missed messages, when the same session reconnects in time (story 47)", async () => {
+    const { a, b, ga } = await pair();
+
+    // a drops; b keeps talking while a is away — the message buffers.
+    const dropped = once(b, CHAT_EVENTS.partnerDisconnected);
+    a.close();
+    await dropped;
+    const acked = once<AckPayload>(b, CHAT_EVENTS.ack);
+    b.emit(CHAT_EVENTS.send, { text: "wb soon?", clientMessageId: "c-3" });
+    await acked;
+
+    // a reconnects as the *same* guest session (new token, same cookie) and asks
+    // to resume; the server restores the match and replays the buffer.
+    const a2 = await connect(await tokenFor(ga.cookie));
+    const partnerBack = once(b, CHAT_EVENTS.partnerReconnected);
+    const resumed = once<{
+      role: string;
+      partnerConnected: boolean;
+      buffer: ChatMessagePayload[];
+    }>(a2, CHAT_EVENTS.resumed);
+    a2.emit(CHAT_EVENTS.resume);
+    const [restored] = await Promise.all([resumed, partnerBack]);
+    expect(restored.partnerConnected).toBe(true);
+    expect(restored.buffer.map((m) => m.text)).toEqual(["wb soon?"]);
+
+    // The chat works again end-to-end: a's new socket reaches b.
+    const received = once<ChatMessagePayload>(b, CHAT_EVENTS.message);
+    a2.emit(CHAT_EVENTS.send, { text: "back!" });
+    expect((await received).text).toBe("back!");
+
+    a2.close();
     b.close();
   });
 });

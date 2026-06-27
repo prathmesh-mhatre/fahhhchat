@@ -1,5 +1,5 @@
 import type { Server, Socket } from "socket.io";
-import { rateLimits } from "@fahhhchat/config";
+import { productConfig, rateLimits } from "@fahhhchat/config";
 import type {
   Match,
   QueuedParticipant,
@@ -206,23 +206,6 @@ describe("ChatGateway", () => {
     );
   });
 
-  it("ends the match on disconnect and tells the partner the chat is over", async () => {
-    const { gateway, chat, delivered } = buildGateway();
-    await seedMatch(chat);
-    const initiatorSocket = fakeSocket(INITIATOR.socketId, INITIATOR.identity);
-
-    await gateway.handleDisconnect(initiatorSocket.socket);
-
-    // The remaining partner is told the match ended...
-    const ended = delivered.find((d) => d.event === CHAT_EVENTS.matchEnded);
-    expect(ended?.to).toBe(RESPONDER.socketId);
-    expect((ended?.payload as { reason: string }).reason).toBe(
-      "partner_disconnected",
-    );
-    // ...and the match is gone, so a later send from the partner is refused.
-    expect(await chat.activeMatchFor(RESPONDER.identity)).toBeNull();
-  });
-
   it("ignores a disconnect from a socket that was never in a match", async () => {
     const { gateway, delivered } = buildGateway();
     const stranger = fakeSocket("never-chatted", guest("g99"));
@@ -230,6 +213,141 @@ describe("ChatGateway", () => {
     await gateway.handleDisconnect(stranger.socket);
 
     expect(delivered).toHaveLength(0);
+  });
+
+  describe("reconnect grace (story 47)", () => {
+    it("holds the match open on disconnect and warns the partner instead of ending", async () => {
+      const { gateway, chat, delivered } = buildGateway();
+      await seedMatch(chat);
+      const dropped = fakeSocket(INITIATOR.socketId, INITIATOR.identity);
+
+      await gateway.handleDisconnect(dropped.socket);
+
+      // The partner is told to wait, not that the chat is over.
+      const warn = delivered.find(
+        (d) => d.event === CHAT_EVENTS.partnerDisconnected,
+      );
+      expect(warn?.to).toBe(RESPONDER.socketId);
+      expect((warn?.payload as { graceSeconds: number }).graceSeconds).toBe(
+        productConfig.reconnectGraceSeconds,
+      );
+      expect(
+        delivered.find((d) => d.event === CHAT_EVENTS.matchEnded),
+      ).toBeUndefined();
+      // The match is still live for the remaining partner.
+      expect(await chat.activeMatchFor(RESPONDER.identity)).not.toBeNull();
+    });
+
+    it("restores a reconnecting session and tells the partner they are back", async () => {
+      const { gateway, chat, delivered } = buildGateway();
+      await seedMatch(chat);
+      await gateway.handleDisconnect(
+        fakeSocket(INITIATOR.socketId, INITIATOR.identity).socket,
+      );
+
+      // The same identity reconnects on a fresh socket and asks to resume.
+      const reconnected = fakeSocket("s-init-2", INITIATOR.identity);
+      await gateway.handleResume(reconnected.socket);
+
+      const resumed = reconnected.emitted.find(
+        (e) => e.event === CHAT_EVENTS.resumed,
+      );
+      expect((resumed?.payload as { role: string }).role).toBe("initiator");
+      const back = delivered.find(
+        (d) => d.event === CHAT_EVENTS.partnerReconnected,
+      );
+      expect(back?.to).toBe(RESPONDER.socketId);
+      // The match is still live and now routes to the new socket.
+      expect(await chat.activeMatchFor(INITIATOR.identity)).not.toBeNull();
+    });
+
+    it("replays the messages a returning session missed while away", async () => {
+      const { gateway, chat } = buildGateway();
+      await seedMatch(chat);
+      await gateway.handleDisconnect(
+        fakeSocket(INITIATOR.socketId, INITIATOR.identity).socket,
+      );
+
+      // The still-present partner keeps chatting; the message buffers.
+      await gateway.handleSend(
+        fakeSocket(RESPONDER.socketId, RESPONDER.identity).socket,
+        { text: "you still there?" },
+      );
+
+      const reconnected = fakeSocket("s-init-2", INITIATOR.identity);
+      await gateway.handleResume(reconnected.socket);
+
+      const resumed = reconnected.emitted.find(
+        (e) => e.event === CHAT_EVENTS.resumed,
+      );
+      const buffer = (resumed?.payload as { buffer: Array<{ text: string }> })
+        .buffer;
+      expect(buffer.map((m) => m.text)).toEqual(["you still there?"]);
+    });
+
+    it("tells a session with no live match there is nothing to resume", async () => {
+      const { gateway } = buildGateway();
+      const lonely = fakeSocket("s-lonely", guest("g-lonely"));
+
+      await gateway.handleResume(lonely.socket);
+
+      expect(lonely.emitted).toContainEqual({
+        event: CHAT_EVENTS.resumeFailed,
+        payload: { reason: "no_active_match" },
+      });
+    });
+
+    it("ends the match and tells the partner once the grace window lapses", async () => {
+      jest.useFakeTimers();
+      try {
+        const { gateway, chat, delivered } = buildGateway();
+        await seedMatch(chat);
+        await gateway.handleDisconnect(
+          fakeSocket(INITIATOR.socketId, INITIATOR.identity).socket,
+        );
+
+        await jest.advanceTimersByTimeAsync(
+          productConfig.reconnectGraceSeconds * 1000,
+        );
+
+        const ended = delivered.find((d) => d.event === CHAT_EVENTS.matchEnded);
+        expect(ended?.to).toBe(RESPONDER.socketId);
+        expect((ended?.payload as { reason: string }).reason).toBe("timeout");
+        expect(await chat.activeMatchFor(RESPONDER.identity)).toBeNull();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it("does not tear the match down if the session reconnects before the window lapses", async () => {
+      jest.useFakeTimers();
+      try {
+        const { gateway, chat, delivered } = buildGateway();
+        await seedMatch(chat);
+        await gateway.handleDisconnect(
+          fakeSocket(INITIATOR.socketId, INITIATOR.identity).socket,
+        );
+
+        // Reconnect well inside the window, then let the original timer fire.
+        await jest.advanceTimersByTimeAsync(
+          (productConfig.reconnectGraceSeconds - 1) * 1000,
+        );
+        await gateway.handleResume(
+          fakeSocket("s-init-2", INITIATOR.identity).socket,
+        );
+        await jest.advanceTimersByTimeAsync(
+          productConfig.reconnectGraceSeconds * 1000,
+        );
+
+        // The stale timer must not end a healthy, resumed chat.
+        expect(
+          delivered.find((d) => d.event === CHAT_EVENTS.matchEnded),
+        ).toBeUndefined();
+        expect(await chat.activeMatchFor(INITIATOR.identity)).not.toBeNull();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 
   describe("typing indicators (story 40)", () => {

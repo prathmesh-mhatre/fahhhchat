@@ -15,7 +15,7 @@ export type MatchRole = "initiator" | "responder";
  * One participant of an active match as the chat layer tracks them: their stable
  * {@link identityKey}, the role they hold, and the socket they are currently
  * reachable on. The socket is what a message is delivered to; it is captured at
- * match creation and (in later slices) updated on reconnect.
+ * match creation and updated on reconnect within the grace window (story 47).
  */
 export interface ActiveMatchParticipant {
   /** Stable identity key (`kind:id`) used to look the participant's match up. */
@@ -32,6 +32,22 @@ export interface ActiveMatchParticipant {
    * keystroke, and never trusted from the client.
    */
   displayName: string;
+  /**
+   * Whether this participant currently has a live socket. `false` while they are
+   * inside the reconnect grace window (story 47): their old socket dropped but the
+   * match is held open for a short same-session reconnect. A send to the partner
+   * while they are away still buffers, so a returning participant catches up.
+   */
+  connected: boolean;
+  /**
+   * When the reconnect grace window for this participant lapses (ISO 8601), set
+   * only while {@link connected} is `false`. A reconnect is honored only *before*
+   * this instant; after it the match is torn down with `timeout`. Stored on the
+   * record (not just in an in-process timer) so reconnect validity is decided by
+   * the clock rather than by a timer that a multi-instance/crashed process may
+   * never fire.
+   */
+  graceExpiresAt?: string;
 }
 
 /**
@@ -91,12 +107,14 @@ export type SendInvalidReason = "empty" | "too_long";
 
 /**
  * Why an active match ended, delivered to the still-connected partner so the web
- * app can explain the empty chat. This slice only produces `partner_disconnected`
- * (a socket dropped); the deliberate end reasons — Next, report, block, timeout —
- * are added by their own later slices (#26/#27/#25) but share this event so the
- * client handles match-end uniformly.
+ * app can explain the empty chat. `partner_disconnected` is a socket drop with no
+ * grace left to spend (the partner was already away, or grace is disabled);
+ * `timeout` is a reconnect grace window that lapsed without the partner returning
+ * (story 47). The deliberate end reasons — Next, report, block — are added by
+ * their own later slices (#26/#27) but share this event so the client handles
+ * match-end uniformly.
  */
-export type MatchEndReason = "partner_disconnected";
+export type MatchEndReason = "partner_disconnected" | "timeout";
 
 /** The result of ending a match: who to notify, or null if it was already gone. */
 export interface EndedMatch {
@@ -150,6 +168,43 @@ export interface ChatStore {
    * it was already gone — making end idempotent under a disconnect/Next race.
    */
   removeMatch(matchId: string): Promise<ActiveMatch | null>;
+  /**
+   * Mark the participant currently reachable on {@link socketId} as disconnected
+   * and open their reconnect grace window until {@link graceExpiresAt} (story 47).
+   * Drops the stale socket index so no send targets a dead socket, but keeps the
+   * match and buffer alive so the participant can return. Returns the affected
+   * match, the disconnected participant's identity key, and the partner — or null
+   * if the socket was not in a live match (already torn down, or never chatting).
+   */
+  markDisconnected(
+    socketId: string,
+    graceExpiresAt: string,
+  ): Promise<DisconnectMark | null>;
+  /**
+   * Re-bind the participant identified by {@link identityKey} to a fresh
+   * {@link newSocketId}, clearing their disconnected/grace state, and re-index the
+   * new socket for disconnect cleanup (story 47). Returns the updated match, or
+   * null if the identity holds no live match (e.g. grace already lapsed and the
+   * match was torn down). Idempotent for an already-connected participant.
+   */
+  reattach(
+    identityKey: string,
+    newSocketId: string,
+  ): Promise<ActiveMatch | null>;
+}
+
+/**
+ * The outcome of {@link ChatStore.markDisconnected}: the match a dropped socket
+ * belonged to, the identity key of the participant that dropped, and the partner
+ * on the other side, so the service can decide whether to hold grace (partner
+ * still here) or tear down now (partner already gone).
+ */
+export interface DisconnectMark {
+  match: ActiveMatch;
+  /** Identity key of the participant whose socket dropped. */
+  participantKey: string;
+  /** The other participant, as recorded at the moment of disconnect. */
+  partner: ActiveMatchParticipant;
 }
 
 export const CHAT_STORE = Symbol("CHAT_STORE");
@@ -209,6 +264,33 @@ export const CHAT_EVENTS = {
   typing: "chat:typing",
   /** Server → remaining participant(s): the match ended; chat is over. */
   matchEnded: "match:ended",
+  /**
+   * Client → server: a freshly reconnected socket asking to rejoin the match its
+   * session was in (story 47). The server resolves the match from the socket's
+   * authenticated identity — the client asserts nothing — and replies with
+   * {@link resumed} or {@link resumeFailed}.
+   */
+  resume: "chat:resume",
+  /**
+   * Server → reconnecting client: the match was restored. Carries the client's
+   * role and the recent {@link ChatMessage} buffer so it can repaint the
+   * conversation it briefly dropped out of, plus whether the partner is presently
+   * connected.
+   */
+  resumed: "chat:resumed",
+  /**
+   * Server → reconnecting client: there is no match to resume — the grace window
+   * lapsed (or none existed). The client should return to the matching screen.
+   */
+  resumeFailed: "chat:resume-failed",
+  /**
+   * Server → partner: the other participant's socket dropped but the match is
+   * being held open for a brief reconnect (story 47). Carries the grace length so
+   * the partner's UI can show a "reconnecting…" hint rather than ending the chat.
+   */
+  partnerDisconnected: "match:partner-disconnected",
+  /** Server → partner: the other participant reconnected within grace; chat resumes. */
+  partnerReconnected: "match:partner-reconnected",
 } as const;
 
 /**
@@ -265,6 +347,41 @@ export interface MatchEndedPayload {
 }
 
 /**
+ * Server → reconnecting client payload for {@link CHAT_EVENTS.resumed}. Carries
+ * the client's own role and the recent buffer so it can restore the conversation,
+ * and whether the partner is currently connected so it can show the right
+ * presence state on return.
+ */
+export interface ResumedPayload {
+  matchId: string;
+  role: MatchRole;
+  /** Whether the partner currently has a live socket. */
+  partnerConnected: boolean;
+  /** The match's recent rolling buffer, oldest-first. */
+  buffer: ChatMessage[];
+}
+
+/** Server → reconnecting client payload reporting there was no match to resume. */
+export interface ResumeFailedPayload {
+  reason: "no_active_match";
+}
+
+/**
+ * Server → partner payload for {@link CHAT_EVENTS.partnerDisconnected}: the other
+ * side dropped but the match is held open for {@link graceSeconds} for them to
+ * reconnect (story 47).
+ */
+export interface PartnerDisconnectedPayload {
+  matchId: string;
+  graceSeconds: number;
+}
+
+/** Server → partner payload for {@link CHAT_EVENTS.partnerReconnected}. */
+export interface PartnerReconnectedPayload {
+  matchId: string;
+}
+
+/**
  * Client → server payload for {@link CHAT_EVENTS.typing}. The client asserts
  * only whether it is currently typing; the server resolves *who* is typing from
  * the authenticated socket, so a client can neither spoof another user's typing
@@ -311,3 +428,47 @@ export type TypingResult =
       isTyping: boolean;
     }
   | { status: "no_active_match" };
+
+/**
+ * Outcome of a socket dropping while in a match, returned by
+ * {@link import("./chat.service").ChatService.beginReconnectGrace}. `none` means
+ * the socket held no live match (only ever queued, or already torn down). `grace`
+ * means the match is held open for the dropped participant to reconnect: it
+ * carries the grace deadline and the partner's socket so the gateway can arm a
+ * teardown timer and tell the partner to wait (story 47). `ended` means there was
+ * no grace to spend (the partner was already away) so the match was torn down
+ * immediately, with the usual notify list.
+ */
+export type BeginReconnectGraceResult =
+  | { status: "none" }
+  | {
+      status: "grace";
+      matchId: string;
+      /** Identity key of the participant who dropped (the one being waited for). */
+      participantKey: string;
+      /** When the grace window lapses (ISO 8601). */
+      graceExpiresAt: string;
+      /** The still-connected partner's socket, to send the "reconnecting" hint. */
+      partnerSocketId: string;
+    }
+  | { status: "ended"; ended: EndedMatch };
+
+/**
+ * Outcome of a reconnect attempt, returned by
+ * {@link import("./chat.service").ChatService.resume}. `resumed` means the match
+ * was found within grace and re-bound to the new socket: it carries the role, the
+ * recent buffer to repaint, and the partner's presence/socket so the gateway can
+ * announce the return. `no_active_match` means there was nothing to resume; when
+ * the grace window had lapsed but the match was still lingering, {@link ended}
+ * carries the teardown so the gateway can also notify the partner.
+ */
+export type ResumeResult =
+  | {
+      status: "resumed";
+      matchId: string;
+      role: MatchRole;
+      buffer: ChatMessage[];
+      partnerConnected: boolean;
+      partnerSocketId: string | null;
+    }
+  | { status: "no_active_match"; ended: EndedMatch | null };
