@@ -9,6 +9,8 @@ import {
   CHAT_EVENTS,
   type AckPayload,
   type ChatMessagePayload,
+  type MatchEndedPayload,
+  type SendFailedPayload,
   type TypingIndicatorPayload,
 } from "../src/chat/chat.types";
 import { MATCHMAKING_EVENTS } from "../src/matchmaking/matchmaking.types";
@@ -211,6 +213,32 @@ describe("Realtime text chat (e2e)", () => {
     expect((await received).text).toBe("back!");
 
     a2.close();
+    b.close();
+  });
+
+  it("ends the match and lets the clicker requeue when they confirm Next (issue #26, story 51)", async () => {
+    const { a, b } = await pair();
+
+    // a confirms Next (the committed second click reaches the server). b is told
+    // the chat ended with reason `next`, never that a is "reconnecting".
+    const ended = once<MatchEndedPayload>(b, CHAT_EVENTS.matchEnded);
+    a.emit(CHAT_EVENTS.next);
+    expect((await ended).reason).toBe("next");
+
+    // The match is gone for a too: a stray send after Next is refused, not
+    // delivered out of context (the same match-end guardrail as a disconnect).
+    const failed = once<SendFailedPayload>(a, CHAT_EVENTS.sendFailed);
+    a.emit(CHAT_EVENTS.send, { text: "should not deliver", clientMessageId: "c-x" });
+    expect((await failed).reason).toBe("match_ended");
+
+    // The requeue half of story 51 is the same join path any user takes: a's
+    // existing connection can re-enter the pool immediately (no rapid-Next
+    // cooldown beyond the two-step confirm, story 145).
+    const waiting = once(a, MATCHMAKING_EVENTS.waiting);
+    a.emit(MATCHMAKING_EVENTS.join);
+    await waiting;
+
+    a.close();
     b.close();
   });
 });

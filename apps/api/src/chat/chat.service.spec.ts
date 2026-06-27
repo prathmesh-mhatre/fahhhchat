@@ -316,6 +316,58 @@ describe("ChatService", () => {
     });
   });
 
+  describe("confirmed Next (issue #26, story 51)", () => {
+    it("ends the caller's match with reason `next` and notifies only the partner", async () => {
+      const { service } = buildService();
+      const created = match(initiator, responder);
+      await service.registerMatch(created);
+
+      const ended = await service.nextMatch(initiator.identity);
+
+      expect(ended).not.toBeNull();
+      expect(ended?.reason).toBe("next");
+      // The Next-clicker's own socket is excluded — its client already moved on
+      // and is about to requeue — so only the stranger is told the chat ended.
+      expect(ended?.notifySocketIds).toEqual([responder.socketId]);
+    });
+
+    it("tears the match (and its buffer) down so no further send routes", async () => {
+      const { service } = buildService();
+      const created = match(initiator, responder);
+      await service.registerMatch(created);
+      await service.send(initiator.identity, { text: "gone after next" });
+
+      await service.nextMatch(responder.identity);
+
+      expect(await service.activeMatchFor(initiator.identity)).toBeNull();
+      expect(await service.activeMatchFor(responder.identity)).toBeNull();
+      expect(await service.buffer(created.matchId)).toHaveLength(0);
+    });
+
+    it("notifies the partner when the *responder* clicks Next", async () => {
+      const { service } = buildService();
+      await service.registerMatch(match(initiator, responder));
+
+      const ended = await service.nextMatch(responder.identity);
+
+      expect(ended?.notifySocketIds).toEqual([initiator.socketId]);
+    });
+
+    it("is a no-op when the caller is not in a live match", async () => {
+      const { service } = buildService();
+
+      expect(await service.nextMatch(initiator.identity)).toBeNull();
+    });
+
+    it("is idempotent under a double Next (the match is already gone)", async () => {
+      const { service } = buildService();
+      await service.registerMatch(match(initiator, responder));
+
+      await service.nextMatch(initiator.identity);
+      expect(await service.nextMatch(initiator.identity)).toBeNull();
+    });
+  });
+
   describe("reconnect grace (story 47)", () => {
     const t0 = new Date("2026-06-26T12:00:00.000Z");
     /** A time `seconds` after t0. */

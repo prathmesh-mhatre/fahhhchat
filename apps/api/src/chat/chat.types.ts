@@ -110,11 +110,13 @@ export type SendInvalidReason = "empty" | "too_long";
  * app can explain the empty chat. `partner_disconnected` is a socket drop with no
  * grace left to spend (the partner was already away, or grace is disabled);
  * `timeout` is a reconnect grace window that lapsed without the partner returning
- * (story 47). The deliberate end reasons — Next, report, block — are added by
- * their own later slices (#26/#27) but share this event so the client handles
- * match-end uniformly.
+ * (story 47). `next` is a *deliberate* end: the partner confirmed the two-step
+ * Next control and moved on (issue #26, stories 49-51) — distinct from a drop so
+ * the remaining user can be told the stranger left rather than "reconnecting…".
+ * The other deliberate ends — report, block — are added by their own later slice
+ * (#27) but share this event so the client handles match-end uniformly.
  */
-export type MatchEndReason = "partner_disconnected" | "timeout";
+export type MatchEndReason = "partner_disconnected" | "timeout" | "next";
 
 /** The result of ending a match: who to notify, or null if it was already gone. */
 export interface EndedMatch {
@@ -262,6 +264,22 @@ export const CHAT_EVENTS = {
    * generated display name so the partner can show "<name> is typing…".
    */
   typing: "chat:typing",
+  /**
+   * Client → server: the user *confirmed* the two-step Next control and wants to
+   * permanently close the current match and move on (issue #26, story 51). The
+   * two-step confirm (first click arms, second click within
+   * {@link import("@fahhhchat/config").productConfig.nextConfirmSeconds} commits —
+   * stories 49-50) is a purely client-side gesture; only the committed second
+   * click reaches the server as this event. The server resolves the match from
+   * the socket's authenticated identity — never client input — ends it with
+   * reason `next`, and tells the *partner* their stranger left. The requeue half
+   * of story 51 is the client re-emitting {@link
+   * import("../matchmaking/matchmaking.types").MATCHMAKING_EVENTS.join} after the
+   * end, the same path any user takes to enter the pool, so it is not a separate
+   * server event. There is deliberately no ack back to the caller and no
+   * rapid-Next cooldown beyond the two-step (story 145) — Next stays fluid.
+   */
+  next: "match:next",
   /** Server → remaining participant(s): the match ended; chat is over. */
   matchEnded: "match:ended",
   /**
