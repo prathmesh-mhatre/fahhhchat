@@ -215,6 +215,45 @@ describe("ChatGateway", () => {
     expect(delivered).toHaveLength(0);
   });
 
+  describe("confirmed Next (issue #26, story 51)", () => {
+    it("ends the match and tells only the partner the chat is over (reason `next`)", async () => {
+      const { gateway, chat, delivered } = buildGateway();
+      await seedMatch(chat);
+      const clicker = fakeSocket(INITIATOR.socketId, INITIATOR.identity);
+
+      await gateway.handleNext(clicker.socket);
+
+      const ended = delivered.filter((d) => d.event === CHAT_EVENTS.matchEnded);
+      // Exactly one notice, to the partner — never echoed back to the clicker.
+      expect(ended).toHaveLength(1);
+      expect(ended[0].to).toBe(RESPONDER.socketId);
+      expect((ended[0].payload as { reason: string }).reason).toBe("next");
+      expect(clicker.emitted).toHaveLength(0);
+      // The match is gone for both sides.
+      expect(await chat.activeMatchFor(INITIATOR.identity)).toBeNull();
+      expect(await chat.activeMatchFor(RESPONDER.identity)).toBeNull();
+    });
+
+    it("is a silent no-op for an unauthenticated socket", async () => {
+      const { gateway, delivered } = buildGateway();
+      const rogue = fakeSocket("rogue"); // no identity
+
+      await gateway.handleNext(rogue.socket);
+
+      expect(delivered).toHaveLength(0);
+      expect(rogue.emitted).toHaveLength(0);
+    });
+
+    it("is a silent no-op when the socket is not in a live match", async () => {
+      const { gateway, delivered } = buildGateway();
+      const unmatched = fakeSocket("idle", guest("g99"));
+
+      await gateway.handleNext(unmatched.socket);
+
+      expect(delivered).toHaveLength(0);
+    });
+  });
+
   describe("reconnect grace (story 47)", () => {
     it("holds the match open on disconnect and warns the partner instead of ending", async () => {
       const { gateway, chat, delivered } = buildGateway();

@@ -363,6 +363,26 @@ export class ChatService {
   }
 
   /**
+   * Permanently close the match the caller is in because they confirmed the
+   * two-step Next control (issue #26, story 51). The match is resolved from the
+   * caller's *identity* — never client input — so a user can only ever Next their
+   * own current chat. The caller's own socket is excluded from the notify list:
+   * its client already transitioned on the confirmed click and is about to requeue
+   * itself, so only the *partner* is told the chat ended (with reason `next`). A
+   * no-op returning null when the caller is not in a live match (already ended, or
+   * never matched), which keeps a double-Next or a Next racing a disconnect safe.
+   */
+  async nextMatch(identity: RealtimeIdentity): Promise<EndedMatch | null> {
+    const callerKey = chatIdentityKey(identity);
+    const match = await this.store.getMatchByIdentity(callerKey);
+    if (!match) {
+      return null;
+    }
+    const caller = match.participants.find((p) => p.identityKey === callerKey);
+    return this.endMatch(match.matchId, "next", caller?.socketId);
+  }
+
+  /**
    * Tear a match down and report whom to notify. {@link excludeSocketId} is the
    * socket that triggered the end (e.g. the one that disconnected); it is left
    * out of the notify list since it is gone or already knows. Idempotent: a match

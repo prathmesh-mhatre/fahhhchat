@@ -150,6 +150,30 @@ export class ChatGateway implements OnGatewayDisconnect {
   }
 
   /**
+   * Permanently close the current match because the user confirmed the two-step
+   * Next control (issue #26, story 51). The arm/confirm gesture and its expiry
+   * (stories 49-50) live entirely on the client; only the committed second click
+   * arrives here. The match is resolved from the socket's verified identity, ended
+   * with reason `next`, and the *partner* is told the chat is over — the caller is
+   * excluded from the notify list because its client already moved on and is about
+   * to requeue itself via the matchmaking join path. An unauthenticated socket, or
+   * one not in a live match, is a silent no-op: there is nothing to end and, since
+   * Next has no ack, nothing to report back.
+   */
+  @SubscribeMessage(CHAT_EVENTS.next)
+  async handleNext(client: Socket): Promise<void> {
+    const identity = this.identityOf(client);
+    if (!identity) {
+      return;
+    }
+
+    const ended = await this.chat.nextMatch(identity);
+    if (ended) {
+      this.notifyEnded(ended);
+    }
+  }
+
+  /**
    * Handle a socket dropping. Instead of ending a live match outright, open a
    * reconnect grace window (story 47): the partner is told to wait and a teardown
    * timer is armed for when the window lapses. Only when there is no one to wait
