@@ -133,6 +133,21 @@ export class AuthService {
     return record ? record.userId : null;
   }
 
+  /**
+   * Resolve the internal id *and* Google email for a valid app token, or null
+   * when the token is invalid or the account is gone. Internal use only — the
+   * admin slice (#34) needs the email to check it against the admin allowlist
+   * (story 83); the email is never surfaced to the client. Mirrors
+   * {@link resolveUserId} but additionally exposes the stored email, so it stays
+   * out of the public {@link UserSummary}.
+   */
+  async resolveAccountIdentity(
+    token: string | undefined
+  ): Promise<{ userId: string; email: string } | null> {
+    const record = await this.resolveRecord(token);
+    return record ? { userId: record.userId, email: record.email } : null;
+  }
+
   /** Persist the account's legal/age acceptance (story 22). */
   async acceptLegal(token: string | undefined, ageConfirmed: unknown, legalVersion: unknown): Promise<UserSummary> {
     const record = await this.requireRecord(token);
