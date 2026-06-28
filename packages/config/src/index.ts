@@ -149,6 +149,23 @@ export const defaultReportCategory: ReportCategory = "other";
  */
 export const reportDetailsMaxLength = 1000;
 
+/**
+ * How many of the most recent chat messages a filed report snapshots as its
+ * surrounding "eligible text context" (issue #29, stories 62-64). When a report
+ * is filed the API copies the tail of the match's live rolling buffer into a
+ * durable report-context record so a moderator can evaluate the incident (story
+ * 62); ordinary chats that are never reported keep no such record (story 63).
+ *
+ * Bounded so a moderator sees enough lead-up to judge an incident without the
+ * product hoarding conversation. It is capped at most to the live buffer
+ * ({@link productConfig.chatBufferMaxMessages}) — you can only persist context
+ * that the rolling buffer still holds — so keep this ≤ that value; the API takes
+ * the newest this-many messages from whatever the buffer currently has. Shared so
+ * the API that captures context and the admin surface that later renders it
+ * (issues #30/#35) agree on the window size.
+ */
+export const reportContextMaxMessages = 50;
+
 /** Type guard: whether `value` is one of the known {@link reportCategories}. */
 export function isReportCategory(value: unknown): value is ReportCategory {
   return (

@@ -13,6 +13,8 @@ import { InMemoryRateLimitStore } from "../rate-limit/in-memory-rate-limit.store
 import { RateLimitService } from "../rate-limit/rate-limit.service";
 import { InMemoryRematchGuardStore } from "../rematch/in-memory-rematch-guard.store";
 import { RematchGuardService } from "../rematch/rematch-guard.service";
+import { InMemoryReportContextStore } from "../report-context/in-memory-report-context.store";
+import { ReportContextService } from "../report-context/report-context.service";
 import { ChatGateway } from "./chat.gateway";
 import { ChatService } from "./chat.service";
 import { CHAT_EVENTS, type DisplayNameResolver } from "./chat.types";
@@ -80,16 +82,20 @@ const resolver: DisplayNameResolver = {
 function buildGateway() {
   const rateLimits = new RateLimitService(new InMemoryRateLimitStore());
   const rematchGuard = new RematchGuardService(new InMemoryRematchGuardStore());
+  const reportContext = new ReportContextService(
+    new InMemoryReportContextStore(),
+  );
   const chat = new ChatService(
     new InMemoryChatStore(),
     resolver,
     rateLimits,
     rematchGuard,
+    reportContext,
   );
   const gateway = new ChatGateway(chat);
   const { server, delivered } = fakeServer();
   (gateway as unknown as { server: Server }).server = server;
-  return { gateway, chat, delivered, rematchGuard };
+  return { gateway, chat, delivered, rematchGuard, reportContext };
 }
 
 const INITIATOR = { identity: user("u1"), socketId: "s-init" };
@@ -395,6 +401,28 @@ describe("ChatGateway", () => {
       expect(reportMatch.mock.calls[0][1].details).toHaveLength(
         reportDetailsMaxLength,
       );
+    });
+
+    it("persists the normalised report form as durable context (issue #29, stories 62-63)", async () => {
+      const { gateway, chat, reportContext } = buildGateway();
+      await seedMatch(chat);
+      // Exchange a line so the context snapshot has something to capture.
+      await chat.send(INITIATOR.identity, { text: "hello" });
+      const reporter = fakeSocket(INITIATOR.socketId, INITIATOR.identity);
+
+      await gateway.handleReport(reporter.socket, {
+        category: "harassment_hate",
+        details: "  abusive  ",
+      });
+
+      // The whole wire path — normalise, capture, end — left one durable record
+      // against the reported user, carrying the trimmed details and the line.
+      const [context] = await reportContext.forReported("guest:g1");
+      expect(context.category).toBe("harassment_hate");
+      expect(context.details).toBe("abusive");
+      expect(context.transcript).toEqual([
+        expect.objectContaining({ author: "reporter", text: "hello" }),
+      ]);
     });
   });
 
