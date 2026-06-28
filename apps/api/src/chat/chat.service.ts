@@ -3,6 +3,7 @@ import { Inject, Injectable } from "@nestjs/common";
 import { containsUrlLike, productConfig } from "@fahhhchat/config";
 import { RateLimitService } from "../rate-limit/rate-limit.service";
 import { RematchGuardService } from "../rematch/rematch-guard.service";
+import { ReportContextService } from "../report-context/report-context.service";
 import type { Match } from "../matchmaking/matchmaking.types";
 import type { RealtimeIdentity } from "../realtime/realtime.types";
 import {
@@ -53,6 +54,7 @@ export class ChatService {
     private readonly displayNames: DisplayNameResolver,
     private readonly rateLimits: RateLimitService,
     private readonly rematchGuard: RematchGuardService,
+    private readonly reportContext: ReportContextService,
   ) {}
 
   /**
@@ -402,19 +404,71 @@ export class ChatService {
    *
    * The {@link submission} carries the validated report form — its category and
    * optional details (issue #28, stories 59-61) — already normalised by the gateway,
-   * so a report always has a settled category. This slice owns the termination +
-   * also-block half plus the *contract* for that form data; capturing the
-   * surrounding chat context (issue #29) and opening a trust-weighted moderator case
-   * (issue #30) are the slices that consume {@link ReportSubmission.category} and
-   * {@link ReportSubmission.details}, so they ride along on the submission here
-   * rather than being re-plumbed later.
+   * so a report always has a settled category. Before the match is torn down (which
+   * drops its buffer) the surrounding eligible text context is snapshotted into a
+   * durable report-context record for moderator review (issue #29, stories 62-63):
+   * the buffer is read *here*, while it still exists, and handed to
+   * {@link ReportContextService.capture}. Context is captured only on this report
+   * path — a plain {@link blockMatch} files none — so ordinary and merely-blocked
+   * chats leave no stored history (story 63), and an unreported chat's buffer simply
+   * expires with the match (story 64). Opening a trust-weighted case from the
+   * captured context is the next slice's job (issue #30).
+   *
+   * A no-op returning null when the caller is not in a live match, keeping a
+   * double-report or a report racing a disconnect safe — nothing is captured and no
+   * block is recorded when there is no match to report.
    */
   async reportMatch(
     identity: RealtimeIdentity,
     submission: ReportSubmission,
     now: Date = new Date(),
   ): Promise<EndedMatch | null> {
-    return this.endSafetyMatch(identity, "report", submission.alsoBlock, now);
+    const reporterKey = chatIdentityKey(identity);
+    const match = await this.store.getMatchByIdentity(reporterKey);
+    if (!match) {
+      return null;
+    }
+    const reporter = match.participants.find(
+      (p) => p.identityKey === reporterKey,
+    );
+    const reported = match.participants.find(
+      (p) => p.identityKey !== reporterKey,
+    );
+
+    // Capture the surrounding eligible text context *before* teardown drops the
+    // buffer (stories 62-63). Both participants are guaranteed present on a match
+    // found by the reporter's own key; the guard narrows the types and would skip
+    // capture rather than throw on a corrupted record.
+    if (reporter && reported) {
+      const buffer = await this.store.getBuffer(match.matchId);
+      await this.reportContext.capture(
+        {
+          matchId: match.matchId,
+          reporterKey,
+          reportedKey: reported.identityKey,
+          reporterRole: reporter.role,
+          category: submission.category,
+          ...(submission.details !== undefined
+            ? { details: submission.details }
+            : {}),
+          alsoBlock: submission.alsoBlock,
+          buffer,
+        },
+        now,
+      );
+
+      if (submission.alsoBlock) {
+        // Mutual exclusion, recorded before teardown drops the participant records
+        // (issue #27, stories 54, 56).
+        await this.rematchGuard.preventRematch(
+          reporterKey,
+          reported.identityKey,
+          now,
+        );
+      }
+    }
+
+    return this.endMatch(match.matchId, "report", reporter?.socketId);
   }
 
   /**
@@ -430,24 +484,6 @@ export class ChatService {
     identity: RealtimeIdentity,
     now: Date = new Date(),
   ): Promise<EndedMatch | null> {
-    return this.endSafetyMatch(identity, "block", true, now);
-  }
-
-  /**
-   * Shared body of {@link reportMatch} and {@link blockMatch}: resolve the
-   * caller's live match, optionally record the mutual rematch-prevention block
-   * between the two participants (stories 53-54), then tear the match down with
-   * the given safety {@link reason} and report the partner for notification. The
-   * partner's identity key is captured before {@link endMatch} runs, since
-   * teardown removes the participant records. Returns null when the caller holds
-   * no live match.
-   */
-  private async endSafetyMatch(
-    identity: RealtimeIdentity,
-    reason: "report" | "block",
-    block: boolean,
-    now: Date,
-  ): Promise<EndedMatch | null> {
     const callerKey = chatIdentityKey(identity);
     const match = await this.store.getMatchByIdentity(callerKey);
     if (!match) {
@@ -458,9 +494,11 @@ export class ChatService {
       (p) => p.identityKey !== callerKey,
     );
 
-    if (block && partner) {
+    if (partner) {
       // Record the mutual exclusion before teardown drops the participant records
       // (stories 53-54). Mutual, so a later join from either side skips the other.
+      // Block files no report, so — unlike {@link reportMatch} — it snapshots no
+      // text context (story 63): only a *reported* chat leaves a durable record.
       await this.rematchGuard.preventRematch(
         callerKey,
         partner.identityKey,
@@ -468,7 +506,7 @@ export class ChatService {
       );
     }
 
-    return this.endMatch(match.matchId, reason, caller?.socketId);
+    return this.endMatch(match.matchId, "block", caller?.socketId);
   }
 
   /**

@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { RateLimitModule } from "../rate-limit/rate-limit.module";
 import { RematchModule } from "../rematch/rematch.module";
+import { ReportContextModule } from "../report-context/report-context.module";
 import { SessionModule } from "../session/session.module";
 import { ChatGateway } from "./chat.gateway";
 import { ChatService } from "./chat.service";
@@ -47,10 +48,19 @@ function createChatStore(): ChatStore {
  * messages against the per-identity `chat_link` budget for link-spam control
  * (issue #24, story 45). Imports {@link RematchModule} so {@link ChatService} can
  * record a rematch-prevention block when a user reports-with-block or blocks the
- * stranger they were chatting with (issue #27, stories 53-54).
+ * stranger they were chatting with (issue #27, stories 53-54). Imports
+ * {@link ReportContextModule} so {@link ChatService} can snapshot the surrounding
+ * eligible text context into a durable record the instant a report is filed —
+ * and only then — for moderator review (issue #29, stories 62-64).
  */
 @Module({
-  imports: [AuthModule, SessionModule, RateLimitModule, RematchModule],
+  imports: [
+    AuthModule,
+    SessionModule,
+    RateLimitModule,
+    RematchModule,
+    ReportContextModule,
+  ],
   providers: [
     ChatService,
     ChatGateway,

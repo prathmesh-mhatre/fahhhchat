@@ -8,6 +8,8 @@ import { InMemoryRateLimitStore } from "../rate-limit/in-memory-rate-limit.store
 import { RateLimitService } from "../rate-limit/rate-limit.service";
 import { InMemoryRematchGuardStore } from "../rematch/in-memory-rematch-guard.store";
 import { RematchGuardService } from "../rematch/rematch-guard.service";
+import { InMemoryReportContextStore } from "../report-context/in-memory-report-context.store";
+import { ReportContextService } from "../report-context/report-context.service";
 import { ChatService } from "./chat.service";
 import type { DisplayNameResolver, ReportSubmission } from "./chat.types";
 import { InMemoryChatStore } from "./in-memory-chat.store";
@@ -63,13 +65,17 @@ function match(
 function buildService(resolver: DisplayNameResolver = stubResolver()) {
   const rateLimits = new RateLimitService(new InMemoryRateLimitStore());
   const rematchGuard = new RematchGuardService(new InMemoryRematchGuardStore());
+  const reportContext = new ReportContextService(
+    new InMemoryReportContextStore(),
+  );
   const service = new ChatService(
     new InMemoryChatStore(),
     resolver,
     rateLimits,
     rematchGuard,
+    reportContext,
   );
-  return { service, rateLimits, rematchGuard };
+  return { service, rateLimits, rematchGuard, reportContext };
 }
 
 describe("ChatService", () => {
@@ -466,6 +472,90 @@ describe("ChatService", () => {
     });
   });
 
+  describe("report context capture (issue #29, stories 62-64)", () => {
+    const initiatorKey = "user:u1";
+    const responderKey = "guest:g1";
+    const report = (alsoBlock: boolean): ReportSubmission => ({
+      alsoBlock,
+      category: "other",
+    });
+
+    /** Build a match and exchange a couple of messages so the buffer is non-empty. */
+    async function seedConversation(service: ChatService) {
+      await service.registerMatch(match(initiator, responder));
+      await service.send(initiator.identity, { text: "hi" });
+      await service.send(responder.identity, { text: "leave me alone" });
+    }
+
+    it("persists the surrounding text context when a report is filed (stories 62-63)", async () => {
+      const { service, reportContext } = buildService();
+      await seedConversation(service);
+
+      const ended = await service.reportMatch(initiator.identity, {
+        alsoBlock: true,
+        category: "harassment_hate",
+        details: "they were abusive",
+      });
+
+      // The report ended the match as before…
+      expect(ended?.reason).toBe("report");
+      // …and left exactly one durable context record against the reported user,
+      // carrying the form data and the conversation, authored reporter-relative.
+      const history = await reportContext.forReported(responderKey);
+      expect(history).toHaveLength(1);
+      const context = history[0];
+      expect(context.matchId).toBe("m1");
+      expect(context.reporterKey).toBe(initiatorKey);
+      expect(context.reportedKey).toBe(responderKey);
+      expect(context.category).toBe("harassment_hate");
+      expect(context.details).toBe("they were abusive");
+      expect(context.alsoBlock).toBe(true);
+      expect(context.transcript).toEqual([
+        expect.objectContaining({ author: "reporter", text: "hi" }),
+        expect.objectContaining({ author: "reported", text: "leave me alone" }),
+      ]);
+    });
+
+    it("captures the context *before* the match (and its buffer) are torn down", async () => {
+      const { service, reportContext } = buildService();
+      await seedConversation(service);
+
+      await service.reportMatch(initiator.identity, report(false));
+
+      // Teardown dropped the live buffer, yet the snapshot survived with both lines.
+      const [context] = await reportContext.forReported(responderKey);
+      expect(context.transcript).toHaveLength(2);
+    });
+
+    it("captures a record even when no messages were exchanged (story 62, sparse)", async () => {
+      const { service, reportContext } = buildService();
+      await service.registerMatch(match(initiator, responder));
+
+      await service.reportMatch(initiator.identity, report(true));
+
+      const [context] = await reportContext.forReported(responderKey);
+      expect(context.transcript).toEqual([]);
+    });
+
+    it("blocking files no context — only a reported chat is stored (story 63)", async () => {
+      const { service, reportContext } = buildService();
+      await seedConversation(service);
+
+      await service.blockMatch(initiator.identity);
+
+      expect(await reportContext.forReported(responderKey)).toEqual([]);
+      expect(await reportContext.forReported(initiatorKey)).toEqual([]);
+    });
+
+    it("captures nothing when there is no live match to report", async () => {
+      const { service, reportContext } = buildService();
+
+      await service.reportMatch(initiator.identity, report(true));
+
+      expect(await reportContext.forReported(responderKey)).toEqual([]);
+    });
+  });
+
   describe("reconnect grace (story 47)", () => {
     const t0 = new Date("2026-06-26T12:00:00.000Z");
     /** A time `seconds` after t0. */
@@ -688,6 +778,7 @@ describe("ChatService", () => {
       stubResolver(),
       new RateLimitService(new InMemoryRateLimitStore()),
       new RematchGuardService(new InMemoryRematchGuardStore()),
+      new ReportContextService(new InMemoryReportContextStore()),
     );
     const created = match(initiator, responder);
     await service.registerMatch(created);
