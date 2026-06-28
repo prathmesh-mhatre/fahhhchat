@@ -13,6 +13,8 @@ import { InMemoryRematchGuardStore } from "../rematch/in-memory-rematch-guard.st
 import { RematchGuardService } from "../rematch/rematch-guard.service";
 import { InMemoryReportContextStore } from "../report-context/in-memory-report-context.store";
 import { ReportContextService } from "../report-context/report-context.service";
+import { InMemoryModerationCasesStore } from "../moderation-cases/in-memory-moderation-cases.store";
+import { ModerationCasesService } from "../moderation-cases/moderation-cases.service";
 import { InMemoryMatchmakingQueue } from "./in-memory-matchmaking.queue";
 import { MatchmakingGateway } from "./matchmaking.gateway";
 import { MatchmakingService } from "./matchmaking.service";
@@ -91,6 +93,7 @@ function buildGateway(disabled: Array<"queue_entry" | "gender_filters"> = []) {
     rateLimits,
     rematchGuard,
     new ReportContextService(new InMemoryReportContextStore()),
+    new ModerationCasesService(new InMemoryModerationCasesStore()),
   );
   const gateway = new MatchmakingGateway(service, auth, chat);
   const { server, delivered } = fakeServer();

@@ -10,6 +10,8 @@ import { InMemoryRematchGuardStore } from "../rematch/in-memory-rematch-guard.st
 import { RematchGuardService } from "../rematch/rematch-guard.service";
 import { InMemoryReportContextStore } from "../report-context/in-memory-report-context.store";
 import { ReportContextService } from "../report-context/report-context.service";
+import { InMemoryModerationCasesStore } from "../moderation-cases/in-memory-moderation-cases.store";
+import { ModerationCasesService } from "../moderation-cases/moderation-cases.service";
 import { ChatService } from "./chat.service";
 import type { DisplayNameResolver, ReportSubmission } from "./chat.types";
 import { InMemoryChatStore } from "./in-memory-chat.store";
@@ -68,14 +70,16 @@ function buildService(resolver: DisplayNameResolver = stubResolver()) {
   const reportContext = new ReportContextService(
     new InMemoryReportContextStore(),
   );
+  const cases = new ModerationCasesService(new InMemoryModerationCasesStore());
   const service = new ChatService(
     new InMemoryChatStore(),
     resolver,
     rateLimits,
     rematchGuard,
     reportContext,
+    cases,
   );
-  return { service, rateLimits, rematchGuard, reportContext };
+  return { service, rateLimits, rematchGuard, reportContext, cases };
 }
 
 describe("ChatService", () => {
@@ -556,6 +560,88 @@ describe("ChatService", () => {
     });
   });
 
+  describe("moderator case creation (issue #30, stories 65/76/77)", () => {
+    // The fixture initiator is a logged-in user (`user:u1`), the responder a guest
+    // (`guest:g1`), so the reporter's identity kind drives the case trust tier.
+    const initiatorKey = "user:u1";
+    const responderKey = "guest:g1";
+    const report = (alsoBlock: boolean): ReportSubmission => ({
+      alsoBlock,
+      category: "other",
+    });
+
+    async function seedConversation(service: ChatService) {
+      await service.registerMatch(match(initiator, responder));
+      await service.send(initiator.identity, { text: "hi" });
+      await service.send(responder.identity, { text: "leave me alone" });
+    }
+
+    it("opens a case linked to the captured report when a report is filed (story 76)", async () => {
+      const { service, reportContext, cases } = buildService();
+      await seedConversation(service);
+
+      await service.reportMatch(initiator.identity, {
+        alsoBlock: true,
+        category: "harassment_hate",
+      });
+
+      const [context] = await reportContext.forReported(responderKey);
+      const queue = await cases.listOpen();
+      expect(queue).toHaveLength(1);
+      const [openedCase] = queue;
+      // The case is opened *from* the report context — same report id and parties.
+      expect(openedCase.reportId).toBe(context.reportId);
+      expect(openedCase.matchId).toBe("m1");
+      expect(openedCase.reporterKey).toBe(initiatorKey);
+      expect(openedCase.reportedKey).toBe(responderKey);
+      expect(openedCase.category).toBe("harassment_hate");
+      expect(openedCase.status).toBe("open");
+    });
+
+    it("weights a logged-in reporter above a guest reporter (story 65)", async () => {
+      const { service, cases } = buildService();
+
+      // Logged-in user reports the guest…
+      await service.registerMatch(match(initiator, responder));
+      await service.reportMatch(initiator.identity, report(true));
+      // …and in a fresh match the guest reports the logged-in user.
+      await service.registerMatch(
+        match(initiator, responder, "m2"),
+      );
+      await service.reportMatch(responder.identity, report(true));
+
+      const queue = await cases.listOpen();
+      expect(queue).toHaveLength(2);
+      const loggedInCase = queue.find((c) => c.reporterKey === initiatorKey);
+      const guestCase = queue.find((c) => c.reporterKey === responderKey);
+      expect(loggedInCase?.reporterTrust).toBe("logged_in");
+      expect(guestCase?.reporterTrust).toBe("guest");
+      // Both count, but the logged-in report ranks first in the queue.
+      expect(guestCase?.trustWeight).toBeGreaterThan(0);
+      expect(loggedInCase?.trustWeight).toBeGreaterThan(
+        guestCase?.trustWeight ?? 0,
+      );
+      expect(queue[0].reporterKey).toBe(initiatorKey);
+    });
+
+    it("opens no case when the stranger is blocked rather than reported (story 63)", async () => {
+      const { service, cases } = buildService();
+      await seedConversation(service);
+
+      await service.blockMatch(initiator.identity);
+
+      expect(await cases.listOpen()).toEqual([]);
+    });
+
+    it("opens no case when there is no live match to report", async () => {
+      const { service, cases } = buildService();
+
+      await service.reportMatch(initiator.identity, report(true));
+
+      expect(await cases.listOpen()).toEqual([]);
+    });
+  });
+
   describe("reconnect grace (story 47)", () => {
     const t0 = new Date("2026-06-26T12:00:00.000Z");
     /** A time `seconds` after t0. */
@@ -779,6 +865,7 @@ describe("ChatService", () => {
       new RateLimitService(new InMemoryRateLimitStore()),
       new RematchGuardService(new InMemoryRematchGuardStore()),
       new ReportContextService(new InMemoryReportContextStore()),
+      new ModerationCasesService(new InMemoryModerationCasesStore()),
     );
     const created = match(initiator, responder);
     await service.registerMatch(created);

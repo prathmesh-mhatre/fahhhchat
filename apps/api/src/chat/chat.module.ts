@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { RateLimitModule } from "../rate-limit/rate-limit.module";
+import { ModerationCasesModule } from "../moderation-cases/moderation-cases.module";
 import { RematchModule } from "../rematch/rematch.module";
 import { ReportContextModule } from "../report-context/report-context.module";
 import { SessionModule } from "../session/session.module";
@@ -51,7 +52,10 @@ function createChatStore(): ChatStore {
  * stranger they were chatting with (issue #27, stories 53-54). Imports
  * {@link ReportContextModule} so {@link ChatService} can snapshot the surrounding
  * eligible text context into a durable record the instant a report is filed —
- * and only then — for moderator review (issue #29, stories 62-64).
+ * and only then — for moderator review (issue #29, stories 62-64). Imports
+ * {@link ModerationCasesModule} so {@link ChatService} can open a trust-weighted
+ * moderator case from that captured report, ranking logged-in reports above guest
+ * ones in the review queue (issue #30, stories 65/76/77).
  */
 @Module({
   imports: [
@@ -60,6 +64,7 @@ function createChatStore(): ChatStore {
     RateLimitModule,
     RematchModule,
     ReportContextModule,
+    ModerationCasesModule,
   ],
   providers: [
     ChatService,
