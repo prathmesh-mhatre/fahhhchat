@@ -166,6 +166,48 @@ export const reportDetailsMaxLength = 1000;
  */
 export const reportContextMaxMessages = 50;
 
+/**
+ * The trust tier a report inherits from *who filed it* (issue #30, story 65). A
+ * logged-in reporter is an accountable internal account, so their report carries
+ * more confidence than a guest's session-scoped one. Both tiers *count* — a guest
+ * report is never dropped — but the logged-in report ranks higher when a moderator
+ * prioritizes the review queue, so prioritization reflects identity confidence.
+ */
+export type ReporterTrust = "logged_in" | "guest";
+
+/**
+ * Queue-prioritization weight per reporter trust tier (issue #30, story 65). A
+ * higher weight surfaces a case earlier in the moderator queue. Guests are
+ * weighted **above zero** so their reports still count (never silently dropped),
+ * and logged-in reports outrank them so review prioritization reflects identity
+ * confidence. Shared because the API that opens cases and the admin surface
+ * (issue #35) that orders the queue must agree on the exact ranking — the numbers
+ * are an ordinal priority, not a probability, so they can be retuned together.
+ */
+export const reporterTrustWeights: Record<ReporterTrust, number> = {
+  logged_in: 2,
+  guest: 1,
+};
+
+/**
+ * Resolve a realtime identity kind — `user` (a logged-in internal account) or
+ * `guest` (a session-scoped guest) — to its report trust tier (issue #30, story
+ * 65). The case layer calls this with the *reporter's* kind so a case freezes the
+ * trust the report was filed with, independent of any later identity change.
+ */
+export function reporterTrustForKind(kind: "user" | "guest"): ReporterTrust {
+  return kind === "user" ? "logged_in" : "guest";
+}
+
+/**
+ * The prioritization weight for a reporter trust tier (issue #30, story 65) — the
+ * value a case freezes from {@link reporterTrustWeights} at creation so the queue
+ * can be ordered without re-deriving it.
+ */
+export function reportTrustWeight(trust: ReporterTrust): number {
+  return reporterTrustWeights[trust];
+}
+
 /** Type guard: whether `value` is one of the known {@link reportCategories}. */
 export function isReportCategory(value: unknown): value is ReportCategory {
   return (

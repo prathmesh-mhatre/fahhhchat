@@ -15,6 +15,8 @@ import { InMemoryRematchGuardStore } from "../rematch/in-memory-rematch-guard.st
 import { RematchGuardService } from "../rematch/rematch-guard.service";
 import { InMemoryReportContextStore } from "../report-context/in-memory-report-context.store";
 import { ReportContextService } from "../report-context/report-context.service";
+import { InMemoryModerationCasesStore } from "../moderation-cases/in-memory-moderation-cases.store";
+import { ModerationCasesService } from "../moderation-cases/moderation-cases.service";
 import { ChatGateway } from "./chat.gateway";
 import { ChatService } from "./chat.service";
 import { CHAT_EVENTS, type DisplayNameResolver } from "./chat.types";
@@ -85,12 +87,14 @@ function buildGateway() {
   const reportContext = new ReportContextService(
     new InMemoryReportContextStore(),
   );
+  const cases = new ModerationCasesService(new InMemoryModerationCasesStore());
   const chat = new ChatService(
     new InMemoryChatStore(),
     resolver,
     rateLimits,
     rematchGuard,
     reportContext,
+    cases,
   );
   const gateway = new ChatGateway(chat);
   const { server, delivered } = fakeServer();

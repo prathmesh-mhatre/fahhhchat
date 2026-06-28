@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
-import { containsUrlLike, productConfig } from "@fahhhchat/config";
+import {
+  containsUrlLike,
+  productConfig,
+  reporterTrustForKind,
+} from "@fahhhchat/config";
+import { ModerationCasesService } from "../moderation-cases/moderation-cases.service";
 import { RateLimitService } from "../rate-limit/rate-limit.service";
 import { RematchGuardService } from "../rematch/rematch-guard.service";
 import { ReportContextService } from "../report-context/report-context.service";
@@ -55,6 +60,7 @@ export class ChatService {
     private readonly rateLimits: RateLimitService,
     private readonly rematchGuard: RematchGuardService,
     private readonly reportContext: ReportContextService,
+    private readonly cases: ModerationCasesService,
   ) {}
 
   /**
@@ -411,8 +417,12 @@ export class ChatService {
    * {@link ReportContextService.capture}. Context is captured only on this report
    * path — a plain {@link blockMatch} files none — so ordinary and merely-blocked
    * chats leave no stored history (story 63), and an unreported chat's buffer simply
-   * expires with the match (story 64). Opening a trust-weighted case from the
-   * captured context is the next slice's job (issue #30).
+   * expires with the match (story 64). From that captured report a trust-weighted
+   * moderator case is opened (issue #30, stories 65/76/77): the case freezes the
+   * reporter's identity confidence — a logged-in report outranks a guest one, but a
+   * guest report still opens a case — so the moderator review queue prioritizes by
+   * who filed the report. Capture and case-open happen together so a reported chat
+   * lands in the queue with its context already attached.
    *
    * A no-op returning null when the caller is not in a live match, keeping a
    * double-report or a report racing a disconnect safe — nothing is captured and no
@@ -441,7 +451,7 @@ export class ChatService {
     // capture rather than throw on a corrupted record.
     if (reporter && reported) {
       const buffer = await this.store.getBuffer(match.matchId);
-      await this.reportContext.capture(
+      const context = await this.reportContext.capture(
         {
           matchId: match.matchId,
           reporterKey,
@@ -453,6 +463,22 @@ export class ChatService {
             : {}),
           alsoBlock: submission.alsoBlock,
           buffer,
+        },
+        now,
+      );
+
+      // Open a trust-weighted moderator case from the captured report (issue #30,
+      // story 65): the reporter's *authenticated* identity kind — never client input
+      // — sets the case's trust tier, so a logged-in report ranks above a guest one
+      // in the review queue while a guest report still counts.
+      await this.cases.openFromReport(
+        {
+          reportId: context.reportId,
+          matchId: context.matchId,
+          reporterKey: context.reporterKey,
+          reportedKey: context.reportedKey,
+          category: context.category,
+          reporterTrust: reporterTrustForKind(identity.kind),
         },
         now,
       );
